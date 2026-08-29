@@ -1,0 +1,146 @@
+.env.example
+.gitignore
+AGENTS.md
+README.md
+docker-compose.yml
+docs/
+    implementation/
+        8-WEEK-ROADMAP.md
+    architecture/
+        DisputeIQ-Architecture Diagram.png
+        DisputeIQ-Flow Diagram.drawio
+        DisputeIQ-Overall Architecture Diagram.png
+        DisputeIQ_Architecture_Flow_Diagram.drawio
+        DisputeIQ_Sequence Diagram.drawio
+        README.md
+    adr/
+        .gitkeep
+        ADR-001-controlled-agentic-boundaries.md
+    setup/
+        OPENSPEC-SETUP.md
+    runbooks/
+        .gitkeep
+    source-of-truth/
+        DisputeIQ_FRD_v3.0_8Week_OpenSpec_GWT_Reference_TOC_Fixed.docx
+        SOURCE-OF-TRUTH.md
+    openspec/
+        001-platform-foundation-prompt.md
+rag/
+    README.md
+    ingestion/
+        .gitkeep
+    evaluation/
+        .gitkeep
+    retrieval/
+        .gitkeep
+evaluations/
+    recommendation/
+        .gitkeep
+    rag/
+        .gitkeep
+    end-to-end/
+        .gitkeep
+    safety/
+        .gitkeep
+    classification/
+        .gitkeep
+frontend/
+    README.md
+    src/
+        .gitkeep
+rules/
+    README.md
+    engine/
+        .gitkeep
+    registry/
+        .gitkeep
+scripts/
+    setup-openspec.ps1
+    setup-openspec.sh
+.vscode/
+    extensions.json
+    settings.json
+.github/
+    workflows/
+        backend-ci.yml
+        frontend-ci.yml
+        openspec-validation.yml
+        security-baseline.yml
+mock-banking/
+    README.md
+    providers/
+        .gitkeep
+infrastructure/
+    docker/
+        .gitkeep
+    cloudflare/
+        .gitkeep
+backend/
+    README.md
+    app/
+        services/
+            .gitkeep
+        domain/
+            .gitkeep
+        adapters/
+            .gitkeep
+        core/
+            .gitkeep
+        api/
+            v1/
+                .gitkeep
+    tests/
+        integration/
+            .gitkeep
+        unit/
+            .gitkeep
+agent/
+    README.md
+    capabilities/
+        .gitkeep
+    prompts/
+        .gitkeep
+    graph/
+        .gitkeep
+    model_gateway/
+        .gitkeep
+openspec/
+    FRD-CAPABILITY-MAP.md
+    config.yaml
+    specs/
+        deterministic-rules/
+            spec.md
+        recommendation/
+            spec.md
+        api-integrations/
+            spec.md
+        classification-and-routing/
+            spec.md
+        architecture-flow-controls/
+            spec.md
+        ai-platform-model-gateway/
+            spec.md
+        case-confidence-and-escalation/
+            spec.md
+        communication-and-closure/
+            spec.md
+        evidence-management/
+            spec.md
+        observability-evaluation/
+            spec.md
+        policy-rag/
+            spec.md
+        security-privacy/
+            spec.md
+        workflow-resilience/
+            spec.md
+        audit-governance/
+            spec.md
+        authoritative-context/
+            spec.md
+        human-in-the-loop/
+            spec.md
+        case-intake-and-management/
+            spec.md
+    changes/
+        archive/

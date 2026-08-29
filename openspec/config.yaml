@@ -1,0 +1,64 @@
+schema: spec-driven
+
+context: |
+  Project: DisputeIQ - AI-Powered Banking Transaction Dispute Investigation & Resolution Platform
+  Delivery target: 8-week production-style pilot using synthetic/mock banking data.
+
+  PROGRAM SOURCE OF TRUTH:
+  docs/source-of-truth/DisputeIQ_FRD_v3.0_8Week_OpenSpec_GWT_Reference_TOC_Fixed.docx
+
+  Source hierarchy:
+  1. FRD
+  2. Approved architecture/sequence/data-flow artifacts
+  3. OpenSpec long-lived capability specs
+  4. Active OpenSpec change
+  5. Code/tests
+
+  Tech stack:
+  - Frontend: React + TypeScript
+  - Backend: Python 3.12 + FastAPI + Pydantic
+  - Orchestration: LangGraph
+  - Operational DB: PostgreSQL
+  - Durable graph checkpoints: PostgreSQL
+  - Vector retrieval: pgvector
+  - Transient cache/queue/locks: Redis
+  - Object storage: Cloudflare R2-compatible object storage
+  - Edge/security: Cloudflare
+  - Observability: OpenTelemetry, LangSmith, LangWatch
+  - CI/CD: GitHub Actions
+  - AI coding assistant: Codex in VS Code
+
+  Architecture invariants:
+  - LangGraph owns state, routing, retry, checkpoint, interrupt, resume.
+  - Provider adapters are authoritative for banking facts.
+  - Evidence completeness is deterministic even when evidence analysis is AI-assisted.
+  - Policy applicability is deterministic before semantic retrieval.
+  - Core decision rules execute outside the LLM.
+  - Case confidence is governed from measurable signals.
+  - Material financial outcomes require human review.
+  - AI capabilities have no financial posting tool.
+  - All LLM calls pass through Model Gateway.
+  - Business state, workflow checkpoints, transient coordination, policy knowledge, files, and audit are separate.
+  - Redis is not a durable source of truth.
+  - All material operations are auditable and correlated.
+
+rules:
+  proposal:
+    - Reference the affected FRD requirement IDs and GWT use cases.
+    - State explicit in-scope and out-of-scope items for the change.
+    - Keep a change small enough to complete and verify within the assigned weekly phase.
+    - Identify affected capabilities and architecture boundaries.
+  specs:
+    - Use Given/When/Then scenarios for every normative behavior.
+    - Preserve FRD terminology and reference the originating FRD requirement ID.
+    - Include happy path, validation/error path, and HITL/fallback behavior where applicable.
+    - Keep observable behavior in specs; implementation mechanics belong in design.md.
+  design:
+    - Explicitly classify components as AI-assisted, deterministic, tool/adapter, human, or platform.
+    - Document state ownership, data contracts, failure handling, security, audit, and observability.
+    - Document model/tool boundaries and fallback/manual-degradation paths.
+    - Do not introduce autonomous financial execution.
+  tasks:
+    - Map implementation tasks to requirement/scenario IDs.
+    - Include tests/evaluations required to prove each behavior.
+    - Keep tasks small and independently verifiable.

@@ -1,0 +1,34 @@
+name: OpenSpec Validation
+
+on:
+  pull_request:
+    paths:
+      - "openspec/**"
+      - "AGENTS.md"
+      - "docs/source-of-truth/**"
+  push:
+    branches: [master]
+    paths:
+      - "openspec/**"
+      - "AGENTS.md"
+      - "docs/source-of-truth/**"
+      - ".github/workflows/openspec-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-openspec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate active changes strictly
+        run: npx --yes @fission-ai/openspec@1.10.0 validate --changes --strict
+
+      - name: Validate long-lived specs
+        run: npx --yes @fission-ai/openspec@1.10.0 validate --specs
