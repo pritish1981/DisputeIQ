@@ -14,6 +14,10 @@ const caseResponse = {
   description: "Customer reports a duplicate card transaction at Synthetic Books.",
   status: "Submitted",
   correlation_id: "corr-demo-001",
+  state_version: 1,
+  opened_at: "2026-08-29T00:00:00Z",
+  closed_at: null,
+  channel_metadata: {},
   submitted_at: "2026-08-29T00:00:00Z",
   created_at: "2026-08-29T00:00:00Z",
   updated_at: "2026-08-29T00:00:00Z",
@@ -35,7 +39,7 @@ const caseResponse = {
       size_bytes: 1204,
       checksum_sha256: "a".repeat(64),
       uploader_ref: "customer:cust_1001",
-      uploaded_at: "2026-08-29T00:00:00Z"
+      registered_at: "2026-08-29T00:00:00Z"
     }
   ],
   provider_context: [

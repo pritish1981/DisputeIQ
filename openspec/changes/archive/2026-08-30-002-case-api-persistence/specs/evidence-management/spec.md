@@ -1,9 +1,4 @@
-# Evidence Management
-
-## Purpose
-Define evidence upload, analysis, deterministic completeness and interrupt/resume.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Deterministic evidence completeness
 FRD reference: FR-EVD-003, FR-ARC-003
@@ -22,17 +17,7 @@ The platform SHALL determine required, available, missing, stale and conflicting
 - **THEN** the metadata is persisted and retrieved without invoking AI-assisted document analysis
 - **AND** any completeness status exposed by Phase 002 is deterministic and marked as preliminary when full workflow evidence gates are not yet enabled
 
-### Requirement: Missing evidence interrupt
-FRD reference: FR-EVD-004
-
-The platform SHALL durably checkpoint and interrupt the workflow when mandatory evidence is missing and SHALL resume only after evidence or authorized human disposition.
-
-#### Scenario: Mandatory evidence missing
-- **GIVEN** mandatory evidence is missing
-- **WHEN** the evidence gate executes
-- **THEN** the workflow is durably checkpointed
-- **AND** an evidence request is created
-- **AND** processing resumes only after evidence or authorized human disposition
+## ADDED Requirements
 
 ### Requirement: Evidence metadata registration
 FRD reference: FR-EVD-001, FR-EVD-002

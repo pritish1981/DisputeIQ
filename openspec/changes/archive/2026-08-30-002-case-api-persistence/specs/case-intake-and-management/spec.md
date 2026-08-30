@@ -1,9 +1,4 @@
-# Case Intake and Management
-
-## Purpose
-Define customer/analyst case intake, validation, lifecycle, idempotency and timeline behavior.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Unique dispute case
 FRD reference: FR-CAS-001
@@ -58,6 +53,8 @@ The platform SHALL return the original result without creating a second dispute 
 - **WHEN** a caller reuses that key with a different logical payload
 - **THEN** the request is rejected as an idempotency conflict
 - **AND** no new case or material side effect is created
+
+## ADDED Requirements
 
 ### Requirement: Case lifecycle and optimistic versioning
 FRD reference: FR-CAS-003, FR-CAS-004

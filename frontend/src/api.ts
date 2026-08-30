@@ -1,10 +1,17 @@
 export type EvidenceMetadata = {
   evidence_id?: string;
+  case_id?: string;
+  evidence_type?: string;
   file_name: string;
+  object_ref?: string | null;
   content_type: string;
   size_bytes: number;
   checksum_sha256: string;
+  source?: string;
+  status?: string;
   uploader_ref: string;
+  correlation_id?: string;
+  registered_at?: string;
   uploaded_at?: string;
 };
 
@@ -22,8 +29,11 @@ export type ProviderContext = {
 
 export type TimelineEntry = {
   timeline_entry_id: string;
+  case_id?: string;
   event_type: string;
   message: string;
+  actor?: string;
+  source?: string;
   audit_event_id: string | null;
   correlation_id: string;
   occurred_at: string;
@@ -31,11 +41,13 @@ export type TimelineEntry = {
 
 export type AuditEvent = {
   audit_event_id: string;
+  case_id?: string;
   event_type: string;
   actor_type: string;
   actor_ref: string;
   source: string;
   object_ref: string | null;
+  state_version?: number;
   correlation_id: string;
   created_at: string;
 };
@@ -50,6 +62,11 @@ export type DisputeCase = {
   description: string;
   status: string;
   correlation_id: string;
+  state_version: number;
+  opened_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  channel_metadata: Record<string, unknown>;
   created_at: string;
   timeline: TimelineEntry[];
   evidence_metadata: EvidenceMetadata[];
@@ -103,7 +120,7 @@ export async function createDispute(
   if (correlationId) {
     headers["X-Correlation-ID"] = correlationId;
   }
-  const response = await fetch(`${API_BASE}/api/v1/disputes`, {
+  const response = await fetch(`${API_BASE}/api/v1/cases`, {
     method: "POST",
     headers,
     body: JSON.stringify(input)
@@ -115,7 +132,7 @@ export async function createDispute(
 }
 
 export async function getDispute(caseId: string): Promise<DisputeCase> {
-  const response = await fetch(`${API_BASE}/api/v1/disputes/${caseId}`);
+  const response = await fetch(`${API_BASE}/api/v1/cases/${caseId}`);
   if (!response.ok) {
     throw await apiError(response, "Load dispute");
   }

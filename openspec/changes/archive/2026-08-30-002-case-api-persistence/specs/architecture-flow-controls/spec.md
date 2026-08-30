@@ -1,9 +1,4 @@
-# Architecture and Flow Controls
-
-## Purpose
-Define cross-cutting architecture constraints that every OpenSpec change must preserve.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Orchestrator boundary
 FRD reference: FR-ARC-001
@@ -37,6 +32,8 @@ The platform SHALL persist each data class through its designated explicit store
 - **WHEN** those records are later retrieved
 - **THEN** they are read from the operational persistence and audit contracts designated for durable business state
 - **AND** Redis is not the durable authority for those records
+
+## ADDED Requirements
 
 ### Requirement: No autonomous financial execution in Case API
 FRD reference: FR-ARC-005, FR-CTX-005

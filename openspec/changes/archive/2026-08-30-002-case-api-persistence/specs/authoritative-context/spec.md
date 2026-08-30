@@ -1,9 +1,4 @@
-# Authoritative Context
-
-## Purpose
-Define read-only banking-context acquisition and lineage.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Authoritative banking facts
 FRD reference: FR-CTX-001, FR-ARC-002
@@ -40,6 +35,8 @@ The platform SHALL deny and audit any workflow tool invocation outside the invok
 - **WHEN** a service attempts a provider operation outside the Phase 002 read-only allow-list
 - **THEN** the operation is denied or unavailable
 - **AND** the denial is observable through structured error and audit metadata where the request is material
+
+## ADDED Requirements
 
 ### Requirement: Related synthetic context
 FRD reference: FR-CTX-002

@@ -1,12 +1,12 @@
 # DisputeIQ
 
-DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. The current `001-platform-foundation` change implements deterministic dispute intake, PostgreSQL persistence, idempotency, read-only synthetic provider context, audit events, timeline visibility, and a React foundation UI.
+DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 002 adds the canonical Case API and durable persistence contracts needed to create, validate, persist, retrieve, safely replay, search, version, and audit a duplicate-card case without LangGraph or an LLM.
 
 ## Source of Truth
 
 Use this hierarchy when requirements disagree:
 
-1. `docs/source-of-truth/DisputeIQ_FRD_v3.0_8Week_OpenSpec_GWT_Reference_TOC_Fixed.docx`
+1. `docs/source-of-truth/DisputeIQ_FRD_v3.1.docx`
 2. Approved artifacts in `docs/architecture/`
 3. Long-lived specifications in `openspec/specs/`
 4. The active change in `openspec/changes/<change-id>/`
@@ -14,16 +14,17 @@ Use this hierarchy when requirements disagree:
 
 Stop and reconcile a conflict before implementing the lower-level source.
 
-## Current Foundation Scope
+## Current Phase 002 Scope
 
-The foundation supports:
+Phase 002 supports:
 
-- creating, safely replaying, and retrieving a synthetic duplicate-card dispute
-- persisting cases, idempotency records, timeline entries, evidence metadata, provider context, and audit events in PostgreSQL
-- deterministic mandatory-field validation
-- accepting or generating correlation IDs
-- emitting an append-only `CASE_CREATED` business audit event
-- displaying case detail in a React/TypeScript UI
+- canonical `POST/GET /api/v1/cases`, deterministic listing/search, and a case timeline endpoint
+- evidence metadata registration/listing with idempotency and optimistic locking
+- durable cases, idempotency records, timeline entries, evidence metadata, provider lineage, and append-only audit events
+- read-only synthetic customer, account, transaction, merchant, settlement, and refund providers
+- Pydantic validation, structured errors, correlation IDs, replay diagnostics, and state versions
+- deprecated `/api/v1/disputes` compatibility routes backed by the same Case Service
+- a React/TypeScript manual validation UI using the canonical Case API
 
 This change does not execute LangGraph, call an LLM or Model Gateway, use policy RAG, perform HITL decisioning, send communications, or expose refund, credit, debit, chargeback, or financial-posting operations.
 
@@ -82,7 +83,7 @@ docker compose exec -T postgres psql `
   -c "SELECT version_num FROM alembic_version;"
 ```
 
-The foundation revision is `20260829_0001`.
+The Phase 002 head revision is `20260830_0002`.
 
 If `alembic_version` does not exist, try the normal online migration from `backend/`:
 
@@ -178,23 +179,28 @@ Keep the backend running on port `8001`. From a new PowerShell terminal:
 
 ```powershell
 $apiBase = "http://127.0.0.1:8001"
+$runId = [guid]::NewGuid().ToString("N")
 $headers = @{
-  "Idempotency-Key" = "readme-demo-001"
-  "X-Correlation-ID" = "corr-readme-001"
+  "Idempotency-Key" = "readme-case-$runId"
+  "X-Correlation-ID" = "corr-readme-$runId"
 }
 $payload = @{
   customer_ref = "cust_1001"
   account_ref = "acct_2001"
   transaction_ref = "txn_3001"
   channel = "web"
+  channel_metadata = @{ locale = "en-US"; source = "readme-smoke" }
   description = "Customer reports a duplicate card transaction at Synthetic Books."
   dispute_type = "duplicate_card_transaction"
   evidence_metadata = @(
     @{
+      evidence_type = "receipt"
       file_name = "receipt.png"
+      object_ref = "r2://synthetic/receipt.png"
       content_type = "image/png"
       size_bytes = 1204
       checksum_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      source = "customer_upload"
       uploader_ref = "customer:cust_1001"
     }
   )
@@ -203,7 +209,7 @@ $body = $payload | ConvertTo-Json -Depth 5
 
 $created = Invoke-RestMethod `
   -Method Post `
-  -Uri "$apiBase/api/v1/disputes" `
+  -Uri "$apiBase/api/v1/cases" `
   -Headers $headers `
   -ContentType "application/json" `
   -Body $body
@@ -216,17 +222,17 @@ Expected creation behavior:
 - HTTP `201`
 - status `Submitted`
 - a generated `case_id`
-- correlation ID `corr-readme-001`
-- one `CASE_CREATED` timeline event
-- one `CASE_CREATED` audit event
-- synthetic provider context
+- the supplied `corr-readme-<runId>` correlation ID
+- initial state version `1`
+- linked `CASE_CREATED` and inline evidence timeline/audit events
+- six synthetic provider lineage records
 
 Replay the identical request with the same key. It must return the original case rather than create another one:
 
 ```powershell
 $replay = Invoke-RestMethod `
   -Method Post `
-  -Uri "$apiBase/api/v1/disputes" `
+  -Uri "$apiBase/api/v1/cases" `
   -Headers $headers `
   -ContentType "application/json" `
   -Body $body
@@ -238,11 +244,51 @@ $created.case_id
 Retrieve the case:
 
 ```powershell
-$case = Invoke-RestMethod "$apiBase/api/v1/disputes/$($created.case_id)"
+$case = Invoke-RestMethod "$apiBase/api/v1/cases/$($created.case_id)"
 $case | ConvertTo-Json -Depth 8
 ```
 
-For validation and idempotency-conflict scenarios, run the backend integration tests described below. They assert HTTP `422` for missing mandatory fields and HTTP `409` when an idempotency key is reused with a different payload.
+Search and inspect the dedicated timeline/evidence projections:
+
+~~~powershell
+$cases = Invoke-RestMethod "$apiBase/api/v1/cases?status=Submitted&customer_ref=cust_1001"
+$timeline = Invoke-RestMethod "$apiBase/api/v1/cases/$($created.case_id)/timeline"
+$evidence = Invoke-RestMethod "$apiBase/api/v1/cases/$($created.case_id)/evidence"
+$cases.total
+$timeline.items
+$evidence.items
+~~~
+
+Register additional evidence metadata using the current case version:
+
+~~~powershell
+$evidenceHeaders = @{
+  "Idempotency-Key" = "readme-evidence-$runId"
+  "If-Match" = '"' + $case.state_version + '"'
+  "X-Correlation-ID" = "corr-readme-evidence-$runId"
+}
+$evidenceBody = @{
+  evidence_type = "customer_statement"
+  file_name = "statement.pdf"
+  object_ref = "r2://synthetic/statement.pdf"
+  content_type = "application/pdf"
+  size_bytes = 4096
+  checksum_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  source = "customer_upload"
+  uploader_ref = "customer:cust_1001"
+} | ConvertTo-Json
+$registered = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$apiBase/api/v1/cases/$($created.case_id)/evidence" `
+  -Headers $evidenceHeaders `
+  -ContentType "application/json" `
+  -Body $evidenceBody
+$registered
+~~~
+
+The integration suite covers missing fields and idempotency keys, unsupported dispute
+types and filters, conflicting replays, stale If-Match versions, unknown cases, provider
+lineage, audit rollback, and the no-LangGraph/no-LLM architecture boundary.
 
 ## Validate the Project
 
@@ -256,6 +302,8 @@ uv run ruff check .
 uv run mypy app tests
 uv run pytest
 ```
+
+Expected result: Ruff passes, mypy reports no issues, and pytest reports `28 passed`.
 
 Focused backend checks:
 
@@ -280,87 +328,130 @@ npm.cmd run build
 npm.cmd audit --audit-level=high
 ```
 
-### Manual UI Checklist
+Expected result: TypeScript checks pass, Vitest reports `4 passed`, the Vite production
+build succeeds, and npm reports zero high-severity vulnerabilities.
 
-With the frontend running, verify:
+## Validate Phase 002 in the UI
 
-- the duplicate-card intake form renders with the synthetic fixture defaults
-- required fields show local validation feedback
-- idempotency key and correlation ID controls are visible
-- clicking **Create synthetic case** creates a case and renders `Submitted`, timeline, evidence metadata, provider context, audit events, and correlation ID
-- reusing the same idempotency key and unchanged payload returns the same case ID
-- entering the created case ID and clicking **Load case** retrieves the same case
-- stopping the backend and submitting again shows a visible request error
+Use both browser surfaces. The React UI covers the analyst-facing create/replay/retrieve
+path. Swagger UI covers the complete API surface, including search, evidence registration,
+optimistic locking, and structured error responses.
 
-## Validation by OpenSpec Task Group
+### React UI Validation
 
-Use the following checks while completing `openspec/changes/001-platform-foundation/tasks.md`:
+Open `http://127.0.0.1:5173` while the backend is running on port `8001`.
+
+1. Confirm the duplicate-card form loads the synthetic customer, account, and transaction
+   references.
+2. Enter a unique idempotency key and optional correlation ID, then select
+   **Create synthetic case**.
+3. Confirm the response shows a generated case ID, `Submitted` status, correlation ID,
+   timeline, evidence metadata, provider context, and audit events.
+4. Confirm provider context includes customer, account, transaction, merchant, settlement,
+   and refund records with source lineage.
+5. Submit the unchanged form again with the same idempotency key. The same case ID must be
+   returned without a duplicate `CASE_CREATED` event.
+6. Change the description but retain the same idempotency key. The UI must display the
+   idempotency-conflict error and no second case may be created.
+7. Paste the case ID into the lookup control and select **Load case**. The same persisted
+   aggregate must be displayed.
+8. Clear the transaction reference and submit. Local required-field validation must block
+   the request.
+9. Stop the backend temporarily and submit again. The UI must display a visible request
+   failure rather than silently ignoring it.
+
+### Swagger UI Validation
+
+Open `http://127.0.0.1:8001/docs`. The canonical `cases` group must expose:
+
+- `POST /api/v1/cases`
+- `GET /api/v1/cases`
+- `GET /api/v1/cases/{case_id}`
+- `POST /api/v1/cases/{case_id}/evidence`
+- `GET /api/v1/cases/{case_id}/evidence`
+- `GET /api/v1/cases/{case_id}/timeline`
+
+The `/api/v1/disputes` create/retrieve routes remain visible only as deprecated
+compatibility delegates.
+
+Create a case through `POST /api/v1/cases` using a unique `Idempotency-Key`, a
+correlation ID, and the synthetic references shown in the API smoke payload. Copy the
+returned `case_id` and confirm the initial `state_version` is `1`.
+
+Then validate:
+
+1. Use `GET /api/v1/cases` with `status=Submitted`, `customer_ref=cust_1001`,
+   `transaction_ref=txn_3001`, or `channel=web`. Matching summaries must be returned
+   in deterministic order.
+2. Register evidence through `POST /api/v1/cases/{case_id}/evidence` with a unique
+   idempotency key and `If-Match` entered as `"1"`. The case version must advance to
+   `2`.
+3. Replay the identical evidence request with the same key. The response must report
+   `replayed: true` and return the same evidence ID.
+4. Submit another evidence request with a new key but stale `If-Match: "1"`. Expect
+   HTTP `409` with `OPTIMISTIC_LOCK_CONFLICT` and no additional evidence record.
+5. Use the evidence and timeline GET endpoints. Confirm chronological
+   `CASE_CREATED` and `EVIDENCE_METADATA_REGISTERED` entries with linked audit IDs.
+6. Retrieve the case again and confirm version `2`, evidence lineage, six provider
+   records, replay diagnostics, and one material audit event for each accepted mutation.
+7. Omit `Idempotency-Key`, submit an unsupported dispute type, request an unknown case,
+   and reuse a key with a changed payload. Confirm stable error codes and correlation IDs.
+
+## Phase 002 Validation Evidence
+
+The completed OpenSpec changes are archived at:
+
+- `openspec/changes/archive/2026-08-30-001-platform-foundation`
+- `openspec/changes/archive/2026-08-30-002-case-api-persistence`
+
+Phase 002 finished with all 34 tasks complete. Its task evidence remains traceable in
+`openspec/changes/archive/2026-08-30-002-case-api-persistence/tasks.md` and
+`docs/implementation/phase-002-case-api-gap-review.md`.
 
 | Task group | Primary validation |
 | --- | --- |
-| 1. Backend foundation | `uv run ruff check .`, `uv run mypy app tests`, `uv run pytest tests/unit/test_schemas.py tests/integration/test_api.py` |
-| 2. Persistence and migration | Alembic revision/table checks against Compose PostgreSQL, then `uv run pytest tests/unit/test_case_service.py` |
-| 3. Intake and idempotency | `uv run pytest tests/integration/test_api.py` |
-| 4. Synthetic provider context | `uv run pytest tests/unit/test_synthetic_providers.py tests/unit/test_case_service.py` |
-| 5. Audit, timeline, correlation | `uv run pytest tests/unit/test_case_service.py tests/integration/test_api.py` |
-| 6. Frontend foundation UI | `npm.cmd run lint`, `npm.cmd run typecheck`, `npm.cmd test`, `npm.cmd run build` |
+| 1. Gap review | Review `docs/implementation/phase-002-case-api-gap-review.md` and OpenAPI |
+| 2. Case persistence | Alembic revision/table checks against Compose PostgreSQL, then service/schema tests |
+| 3. Case API | `uv run pytest tests/integration/test_api.py` |
+| 4. Evidence metadata | API, service, and failure-contract tests |
+| 5. Timeline and audit | Service, API, and audit rollback tests |
+| 6. Provider contracts | `uv run pytest tests/unit/test_synthetic_providers.py` |
 | 7. Architecture boundaries | `uv run pytest tests/integration/test_architecture_boundaries.py` |
-| 8. CI, docs, final validation | all backend/frontend checks, PostgreSQL migration verification, API smoke, dependency audit, and strict OpenSpec validation |
+| 8. CI, docs, final validation | All backend/frontend checks, PostgreSQL migration verification, API smoke, dependency audit, and strict main-spec validation |
 
-Do not mark an OpenSpec task complete until its behavior and named validation have passed.
+## OpenSpec Status and Commands
 
-## OpenSpec Command Sequence
+The commands below use the approved pinned CLI on Windows. If a compatible global
+`openspec` command is available, it can replace the full
+`npx.cmd -y @fission-ai/openspec@1.10.0` prefix.
 
-OpenSpec does not execute an individual checklist task. It reports the active change context and progress; implementation and tests are performed in the repository, and the matching checkbox in `tasks.md` is changed from `[ ]` to `[x]` only after verification.
-
-The commands below use the approved pinned CLI on Windows. If a compatible global `openspec` command is available, it can replace the full `npx.cmd -y @fission-ai/openspec@1.10.0` prefix.
-
-### Inspect the Active Change
-
-From the repository root:
+From the repository root, inspect active changes and validate the long-lived specs:
 
 ```powershell
 npx.cmd -y @fission-ai/openspec@1.10.0 list --json
-npx.cmd -y @fission-ai/openspec@1.10.0 status --change "001-platform-foundation" --json
-npx.cmd -y @fission-ai/openspec@1.10.0 show "001-platform-foundation" --type change
-npx.cmd -y @fission-ai/openspec@1.10.0 instructions apply --change "001-platform-foundation" --json
+npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict
 ```
 
-### Repeat for Each Pending Task
+Expected result:
 
-1. Read the proposal, design, delta specs, and next unchecked task returned by `instructions apply`.
-2. Identify the governing FRD requirement and long-lived capability specification.
-3. Implement only that task and add or update its tests.
-4. Run the focused validation from the task-group table.
-5. Mark only the verified task `[x]` in `openspec/changes/001-platform-foundation/tasks.md`.
-6. Validate the change and refresh progress:
+- Phase 001 and Phase 002 are absent from the active-change list because they are archived.
+- `normalize-rfc2119-requirements` is the only active change.
+- Strict long-lived-spec validation reports `17 passed, 0 failed`.
+
+`validate --all --strict` also validates every active change. It currently reports one
+failure for `normalize-rfc2119-requirements`: that older normalization change contains
+historical delta scenarios that predate the Phase 002 main-spec updates. This does not
+invalidate the archived Phase 002 implementation or the 17 long-lived specs, but the
+normalization change must be reconciled separately before repository-wide validation is
+fully green.
+
+Inspect the archived artifacts and completed Phase 002 checklist with:
 
 ```powershell
-npx.cmd -y @fission-ai/openspec@1.10.0 validate "001-platform-foundation" --type change --strict
-npx.cmd -y @fission-ai/openspec@1.10.0 instructions apply --change "001-platform-foundation" --json
+Get-ChildItem openspec/changes/archive/2026-08-30-001-platform-foundation
+Get-ChildItem openspec/changes/archive/2026-08-30-002-case-api-persistence
+rg -n "^- \[x\]" openspec/changes/archive/2026-08-30-002-case-api-persistence/tasks.md
 ```
-
-Repeat until the apply instructions report `state: "all_done"` and no unchecked tasks remain.
-
-### Final Validation and Archive
-
-After all task-level checks and the full application smoke test pass:
-
-```powershell
-npx.cmd -y @fission-ai/openspec@1.10.0 validate "001-platform-foundation" --type change --strict
-npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict
-npx.cmd -y @fission-ai/openspec@1.10.0 instructions archive --change "001-platform-foundation" --json
-```
-
-Review the archive instructions and delta-to-main-spec updates. Archive only after human approval:
-
-```powershell
-npx.cmd -y @fission-ai/openspec@1.10.0 archive "001-platform-foundation" --yes
-npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict
-npx.cmd -y @fission-ai/openspec@1.10.0 list --json
-```
-
-Do not archive while tasks remain incomplete or required validation is failing.
 
 ### Start a Future Change
 
@@ -372,7 +463,9 @@ npx.cmd -y @fission-ai/openspec@1.10.0 status --change "<change-id>" --json
 npx.cmd -y @fission-ai/openspec@1.10.0 instructions proposal --change "<change-id>" --json
 ```
 
-Create and review proposal, delta specs, design, and tasks before implementation. Then use the same per-task apply, validation, and archive sequence described above.
+Create and review proposal, delta specs, design, and tasks before implementation. During
+implementation, validate the active change after each coherent task group. Archive only
+after all tasks, focused tests, full application checks, and human review are complete.
 
 ## Troubleshooting
 

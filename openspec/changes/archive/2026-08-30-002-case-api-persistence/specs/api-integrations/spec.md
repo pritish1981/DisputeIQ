@@ -1,9 +1,4 @@
-# API and Integrations
-
-## Purpose
-Define public application interfaces and provider contracts.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Versioned REST contracts
 FRD reference: Section 7.16 API and Integration Requirements, FR-CAS-001, FR-CAS-004, FR-CAS-005, FR-EVD-001
@@ -38,6 +33,8 @@ The platform SHALL assign an approved correlation identifier to every accepted i
 - **WHEN** the command is accepted
 - **THEN** the same correlation ID is persisted with case-visible records created by the command
 - **AND** returned responses include the correlation ID
+
+## ADDED Requirements
 
 ### Requirement: Case command controls
 FRD reference: FR-CAS-002, FR-CAS-004

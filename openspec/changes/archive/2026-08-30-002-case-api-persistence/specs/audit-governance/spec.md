@@ -1,9 +1,4 @@
-# Audit Governance and Explainability
-
-## Purpose
-Define append-only business audit, version traceability and reconstruction.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Immutable material events
 FRD reference: FR-AUD-001
@@ -21,15 +16,7 @@ The platform SHALL record every material case lifecycle action as an append-only
 - **THEN** the mutation is not reported as successful
 - **AND** no accepted case or evidence metadata mutation is left without its required business audit event
 
-### Requirement: Decision reconstruction
-FRD reference: FR-AUD-003, FR-AUD-004
-
-The platform SHALL retain sufficient evidence, policy, rule, AI configuration, recommendation and human-decision lineage to reconstruct a completed case.
-
-#### Scenario: Auditor reconstructs completed case
-- **GIVEN** an authorized auditor selects a closed case
-- **WHEN** the audit view is reconstructed
-- **THEN** evidence, policy, rules, AI configuration, recommendation and human decision are traceable
+## ADDED Requirements
 
 ### Requirement: Baseline audit event contract
 FRD reference: FR-AUD-002
