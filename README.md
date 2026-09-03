@@ -1,6 +1,6 @@
 # DisputeIQ
 
-DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 002 adds the canonical Case API and durable persistence contracts needed to create, validate, persist, retrieve, safely replay, search, version, and audit a duplicate-card case without LangGraph or an LLM.
+DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 003 adds controlled policy ingestion so approved, versioned, active policy documents can be validated, chunked, embedded, indexed, evaluated, promoted, and audited before later retrieval and workflow phases consume the corpus.
 
 ## Source of Truth
 
@@ -14,9 +14,11 @@ Use this hierarchy when requirements disagree:
 
 Stop and reconcile a conflict before implementing the lower-level source.
 
-## Current Phase 002 Scope
+## Current Phase 003 Scope
 
-Phase 002 supports:
+Phase 003 includes the Phase 002 Case API baseline plus controlled policy ingestion.
+
+Case API support:
 
 - canonical `POST/GET /api/v1/cases`, deterministic listing/search, and a case timeline endpoint
 - evidence metadata registration/listing with idempotency and optimistic locking
@@ -26,7 +28,17 @@ Phase 002 supports:
 - deprecated `/api/v1/disputes` compatibility routes backed by the same Case Service
 - a React/TypeScript manual validation UI using the canonical Case API
 
-This change does not execute LangGraph, call an LLM or Model Gateway, use policy RAG, perform HITL decisioning, send communications, or expose refund, credit, debit, chargeback, or financial-posting operations.
+Controlled policy ingestion support:
+
+- protected admin policy ingestion endpoints under `/api/v1/policies`
+- deterministic validation for approved/active policy status, source identity, checksums, effective dates, applicability metadata, and duplicate document versions
+- durable policy documents, chunks, ingestion runs, corpus versions, evaluation results, and policy audit events
+- deterministic chunk IDs, chunk hashes, section lineage, source checksums, parser/chunking configuration, embedding configuration, and correlation IDs
+- pgvector and PostgreSQL lexical-search migration DDL for production-style vector and FTS readiness
+- evaluation-gated promotion that preserves the last active corpus when validation, indexing, audit, or mandatory thresholds fail
+- synthetic fixture loader through `uv run python -m app.policy_fixture_loader`
+
+This change does not execute LangGraph, generate recommendations, perform HITL decisioning, send communications, or expose refund, credit, debit, chargeback, or financial-posting operations.
 
 ## Prerequisites
 
@@ -83,7 +95,7 @@ docker compose exec -T postgres psql `
   -c "SELECT version_num FROM alembic_version;"
 ```
 
-The Phase 002 head revision is `20260830_0002`.
+The Phase 003 head revision is `20260903_0003`.
 
 If `alembic_version` does not exist, try the normal online migration from `backend/`:
 
@@ -122,7 +134,10 @@ docker compose exec -T postgres psql `
   -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;"
 ```
 
-Expected application tables are `audit_events`, `cases`, `evidence_metadata`, `idempotency_records`, `provider_context`, and `timeline_entries`.
+Expected application tables include `audit_events`, `cases`, `evidence_metadata`,
+`idempotency_records`, `provider_context`, `timeline_entries`,
+`policy_ingestion_runs`, `policy_documents`, `policy_chunks`,
+`policy_corpus_versions`, `policy_evaluation_results`, and `policy_audit_events`.
 
 ### 3. Start the Backend
 
@@ -290,6 +305,111 @@ The integration suite covers missing fields and idempotency keys, unsupported di
 types and filters, conflicting replays, stale If-Match versions, unknown cases, provider
 lineage, audit rollback, and the no-LangGraph/no-LLM architecture boundary.
 
+## Controlled Policy Ingestion Smoke Test
+
+Keep the backend running on port `8001`. From a new PowerShell terminal:
+
+```powershell
+$apiBase = "http://127.0.0.1:8001"
+$runId = [guid]::NewGuid().ToString("N")
+$policyHeaders = @{
+  "X-Policy-Admin" = "true"
+  "X-Correlation-ID" = "corr-policy-$runId"
+}
+$policyPayload = @{
+  actor_ref = "policy-admin:readme"
+  parser_version = "parser-v1"
+  chunking_config_hash = "chunking-v1"
+  embedding_model = "deterministic-test-embedding-v1"
+  embedding_config_hash = "embedding-v1"
+  retrieval_index_config_hash = "retrieval-v1"
+  documents = @(
+    @{
+      document_id = "POL-DUP-CARD-$runId"
+      version = "2026.09"
+      title = "Synthetic duplicate-card dispute policy"
+      status = "approved"
+      approval_ref = "approval:readme-2026-09"
+      source_identity = "synthetic-policy-manual"
+      source_checksum_sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      effective_from = "2026-01-01T00:00:00Z"
+      effective_to = $null
+      product = "card"
+      channel = "web"
+      jurisdiction = "US"
+      source_type = "approved_policy"
+      sections = @(
+        @{ section = "7.5.1"; text = "Duplicate card disputes require issuer review." },
+        @{ section = "7.5.2"; text = "Policy claims require document version citations." }
+      )
+    }
+  )
+} | ConvertTo-Json -Depth 8
+
+$run = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$apiBase/api/v1/policies/ingestions" `
+  -Headers $policyHeaders `
+  -ContentType "application/json" `
+  -Body $policyPayload
+$run
+```
+
+Expected ingestion behavior:
+
+- HTTP `201`
+- status `indexed`
+- one document and two chunks
+- each chunk has document ID, version, section, checksum, chunk hash, run ID, and both vector and lexical readiness flags
+- a `POLICY_INGESTION_ACCEPTED` audit event with the supplied correlation ID
+
+Promote the candidate corpus:
+
+```powershell
+$promotionBody = @{
+  ingestion_run_id = $run.run_id
+  actor_ref = "policy-admin:readme"
+  corpus_version = "readme-corpus-$runId"
+  index_version = "readme-index-$runId"
+} | ConvertTo-Json
+
+$promotion = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$apiBase/api/v1/policies/promotions" `
+  -Headers $policyHeaders `
+  -ContentType "application/json" `
+  -Body $promotionBody
+$promotion
+```
+
+Expected promotion behavior:
+
+- `promoted` is `true`
+- the active corpus is the requested corpus version
+- evaluation metrics include retrieval quality, citation correctness, metadata integrity, and stale-policy exclusion
+
+Inspect chunk lineage without reading the source file:
+
+```powershell
+$chunkId = $run.documents[0].chunks[0].chunk_id
+$lineage = Invoke-RestMethod `
+  -Uri "$apiBase/api/v1/policies/chunks/$chunkId/lineage" `
+  -Headers $policyHeaders
+$lineage
+```
+
+Expected lineage fields include document ID, version, section, effective date range, ingestion run ID, checksum, chunk hash, corpus version, index version, and correlation ID.
+
+Load and promote the checked-in synthetic fixture through the same service path:
+
+```powershell
+Set-Location backend
+$env:DATABASE_URL = "postgresql+psycopg://disputeiq:disputeiq@127.0.0.1:5433/disputeiq"
+uv run python -m app.policy_fixture_loader
+Remove-Item Env:DATABASE_URL
+Set-Location ..
+```
+
 ## Validate the Project
 
 ### Backend
@@ -303,7 +423,7 @@ uv run mypy app tests
 uv run pytest
 ```
 
-Expected result: Ruff passes, mypy reports no issues, and pytest reports `28 passed`.
+Expected result: Ruff passes, mypy reports no issues, and pytest reports `41 passed`.
 
 Focused backend checks:
 
@@ -313,6 +433,8 @@ uv run pytest tests/unit/test_case_service.py
 uv run pytest tests/unit/test_synthetic_providers.py
 uv run pytest tests/integration/test_api.py
 uv run pytest tests/integration/test_architecture_boundaries.py
+uv run pytest tests/integration/test_policy_ingestion_api.py
+uv run pytest tests/unit/test_policy_ingestion_service.py
 ```
 
 ### Frontend
@@ -419,6 +541,32 @@ Phase 002 finished with all 34 tasks complete. Its task evidence remains traceab
 | 7. Architecture boundaries | `uv run pytest tests/integration/test_architecture_boundaries.py` |
 | 8. CI, docs, final validation | All backend/frontend checks, PostgreSQL migration verification, API smoke, dependency audit, and strict main-spec validation |
 
+## Phase 003 Validation Evidence
+
+The completed OpenSpec change is archived at
+`openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion`.
+Its approved deltas are synced into the long-lived specs under `openspec/specs/`.
+
+| Task group | Primary validation |
+| --- | --- |
+| 1. Gap review | OpenSpec proposal/design plus migration and boundary tests |
+| 2. Policy persistence | Alembic revision/table/index checks and repository/service tests |
+| 3. Validation/chunking | `uv run pytest tests/unit/test_policy_ingestion_service.py` |
+| 4. Embedding/indexing/promotion | Service and API promotion tests, migration pgvector/FTS contract test |
+| 5. Admin API/fixture loader | `uv run pytest tests/integration/test_policy_ingestion_api.py` |
+| 6. Audit/security/observability | Policy API tests, audit service tests, architecture-boundary tests |
+| 7. Evaluation/docs/final validation | Backend checks, policy smoke, OpenSpec strict validation |
+
+Latest validation snapshot:
+
+- `uv run ruff check .`: passed
+- `uv run mypy app tests`: passed with no issues in 32 source files
+- `uv run pytest`: `41 passed`
+- `uv run python -m app.policy_ingestion_smoke`: passed through `validated -> chunked -> embedded -> indexed -> evaluated -> promoted -> audited`
+- `uv run alembic -c alembic.ini upgrade head`: upgraded Compose PostgreSQL to `20260903_0003`
+- PostgreSQL verification confirmed `vector`, policy tables, lexical GIN indexing, and vector cosine indexing
+- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict`: `18 passed, 0 failed`
+
 ## OpenSpec Status and Commands
 
 The commands below use the approved pinned CLI on Windows. If a compatible global
@@ -434,23 +582,21 @@ npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict
 
 Expected result:
 
-- Phase 001 and Phase 002 are absent from the active-change list because they are archived.
-- `normalize-rfc2119-requirements` is the only active change.
+- Phase 001, Phase 002, and Phase 003 are absent from the active-change list because they are archived.
+- `normalize-rfc2119-requirements` is the only active change and its checklist is complete.
 - Strict long-lived-spec validation reports `17 passed, 0 failed`.
 
-`validate --all --strict` also validates every active change. It currently reports one
-failure for `normalize-rfc2119-requirements`: that older normalization change contains
-historical delta scenarios that predate the Phase 002 main-spec updates. This does not
-invalidate the archived Phase 002 implementation or the 17 long-lived specs, but the
-normalization change must be reconciled separately before repository-wide validation is
-fully green.
+`validate --all --strict` also validates every active change and now reports
+`18 passed, 0 failed`.
 
-Inspect the archived artifacts and completed Phase 002 checklist with:
+Inspect the archived artifacts and completed Phase 002/Phase 003 checklists with:
 
 ```powershell
 Get-ChildItem openspec/changes/archive/2026-08-30-001-platform-foundation
 Get-ChildItem openspec/changes/archive/2026-08-30-002-case-api-persistence
+Get-ChildItem openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion
 rg -n "^- \[x\]" openspec/changes/archive/2026-08-30-002-case-api-persistence/tasks.md
+rg -n "^- \[x\]" openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion/tasks.md
 ```
 
 ### Start a Future Change

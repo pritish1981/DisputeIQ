@@ -1,6 +1,7 @@
 # Backend
 
-FastAPI/Pydantic Case API and persistence implementation for `002-case-api-persistence`.
+FastAPI/Pydantic Case API and controlled policy ingestion implementation for
+`003-controlled-policy-ingestion`.
 
 ## Local Checks
 
@@ -14,7 +15,7 @@ uv run pytest
 
 ## Database
 
-The Phase 002 migrations create durable PostgreSQL business and audit tables for:
+The migrations create durable PostgreSQL business, audit, and policy corpus tables for:
 
 - cases
 - idempotency records
@@ -22,6 +23,12 @@ The Phase 002 migrations create durable PostgreSQL business and audit tables for
 - evidence metadata
 - synthetic provider context
 - audit events
+- policy ingestion runs
+- policy documents
+- policy chunks
+- policy corpus versions
+- policy evaluation results
+- policy audit events
 
 Run migrations from `backend/`:
 
@@ -48,5 +55,16 @@ Check:
 - `POST/GET /api/v1/cases/{case_id}/evidence` registers and lists metadata.
 - `GET /api/v1/cases/{case_id}/timeline` returns linked chronological events.
 - `/api/v1/disputes` remains a deprecated compatibility surface.
+- `POST /api/v1/policies/ingestions` validates, chunks, embeds, indexes, and audits approved policy documents.
+- `GET /api/v1/policies/ingestions/{run_id}` returns ingestion lineage.
+- `POST /api/v1/policies/promotions` runs mandatory corpus evaluation and promotes a complete candidate.
+- `GET /api/v1/policies/chunks/{chunk_id}/lineage` reconstructs citation lineage.
 
-Do not add LangGraph, policy RAG, Model Gateway, LLM, HITL, recommendation, communication, or financial posting behavior during this change.
+Load synthetic policy fixtures with:
+
+```powershell
+uv run python -m app.policy_fixture_loader
+```
+
+Do not add LangGraph workflow execution, recommendation, communication, HITL decisioning,
+or financial posting behavior during this change.

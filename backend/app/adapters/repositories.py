@@ -11,6 +11,12 @@ from app.adapters.models import (
     CaseModel,
     EvidenceMetadataModel,
     IdempotencyRecordModel,
+    PolicyAuditEventModel,
+    PolicyChunkModel,
+    PolicyCorpusVersionModel,
+    PolicyDocumentModel,
+    PolicyEvaluationResultModel,
+    PolicyIngestionRunModel,
     ProviderContextModel,
     TimelineEntryModel,
 )
@@ -32,6 +38,18 @@ class OptimisticLockError(Exception):
 
 
 class AuditWriteError(Exception):
+    pass
+
+
+class PolicyVersionConflictError(Exception):
+    pass
+
+
+class PolicyRunNotFoundError(Exception):
+    pass
+
+
+class PolicyPromotionError(Exception):
     pass
 
 
@@ -368,3 +386,276 @@ class TimelineRepository:
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+class PolicyRepository:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def get_document(self, document_id: str, version: str) -> PolicyDocumentModel | None:
+        return self.db.scalar(
+            select(PolicyDocumentModel).where(
+                PolicyDocumentModel.document_id == document_id,
+                PolicyDocumentModel.version == version,
+            )
+        )
+
+    def create_run(
+        self,
+        *,
+        actor_ref: str,
+        source: str,
+        parser_version: str,
+        chunking_config_hash: str,
+        embedding_model: str,
+        embedding_config_hash: str,
+        retrieval_index_config_hash: str,
+        correlation_id: str,
+        now: datetime,
+    ) -> PolicyIngestionRunModel:
+        run = PolicyIngestionRunModel(
+            run_id=str(uuid4()),
+            status="running",
+            actor_ref=actor_ref,
+            source=source,
+            parser_version=parser_version,
+            chunking_config_hash=chunking_config_hash,
+            embedding_model=embedding_model,
+            embedding_config_hash=embedding_config_hash,
+            retrieval_index_config_hash=retrieval_index_config_hash,
+            correlation_id=correlation_id,
+            validation_errors=[],
+            telemetry={},
+            created_at=now,
+            completed_at=None,
+        )
+        self.db.add(run)
+        return run
+
+    def add_document(
+        self,
+        *,
+        run: PolicyIngestionRunModel,
+        document_id: str,
+        version: str,
+        title: str,
+        status: str,
+        approval_ref: str,
+        source_identity: str,
+        source_checksum_sha256: str,
+        effective_from: datetime,
+        effective_to: datetime | None,
+        product: str,
+        channel: str,
+        jurisdiction: str,
+        source_type: str,
+        content: str,
+        now: datetime,
+    ) -> PolicyDocumentModel:
+        existing = self.get_document(document_id, version)
+        if existing is not None:
+            if existing.source_checksum_sha256 != source_checksum_sha256:
+                raise PolicyVersionConflictError(
+                    f"Policy {document_id} version {version} already exists "
+                    "with a different checksum"
+                )
+            raise PolicyVersionConflictError(
+                f"Policy {document_id} version {version} has already been ingested"
+            )
+        document = PolicyDocumentModel(
+            document_id=document_id,
+            version=version,
+            title=title,
+            status=status,
+            approval_ref=approval_ref,
+            source_identity=source_identity,
+            source_checksum_sha256=source_checksum_sha256,
+            effective_from=effective_from,
+            effective_to=effective_to,
+            product=product,
+            channel=channel,
+            jurisdiction=jurisdiction,
+            source_type=source_type,
+            content=content,
+            ingestion_run_id=run.run_id,
+            correlation_id=run.correlation_id,
+            created_at=now,
+        )
+        self.db.add(document)
+        self.db.flush()
+        return document
+
+    def add_chunk(
+        self,
+        *,
+        document: PolicyDocumentModel,
+        run: PolicyIngestionRunModel,
+        chunk_id: str,
+        section: str,
+        content: str,
+        chunk_hash: str,
+        embedding_vector: str,
+        now: datetime,
+    ) -> PolicyChunkModel:
+        chunk = PolicyChunkModel(
+            chunk_id=chunk_id,
+            policy_document_pk=document.policy_document_pk,
+            document_id=document.document_id,
+            version=document.version,
+            section=section,
+            status=document.status,
+            effective_from=document.effective_from,
+            effective_to=document.effective_to,
+            product=document.product,
+            channel=document.channel,
+            jurisdiction=document.jurisdiction,
+            content=content,
+            source_checksum_sha256=document.source_checksum_sha256,
+            chunk_hash=chunk_hash,
+            parser_version=run.parser_version,
+            chunking_config_hash=run.chunking_config_hash,
+            embedding_model=run.embedding_model,
+            embedding_config_hash=run.embedding_config_hash,
+            embedding_vector=embedding_vector,
+            vector_index_ready=True,
+            lexical_index_ready=True,
+            ingestion_run_id=run.run_id,
+            correlation_id=run.correlation_id,
+            created_at=now,
+        )
+        self.db.add(chunk)
+        return chunk
+
+    def complete_run(
+        self,
+        run: PolicyIngestionRunModel,
+        *,
+        status: str,
+        validation_errors: list[dict[str, object]],
+        telemetry: dict[str, object],
+        now: datetime,
+    ) -> None:
+        run.status = status
+        run.validation_errors = validation_errors
+        run.telemetry = telemetry
+        run.completed_at = now
+
+    def get_run_detail(self, run_id: str) -> PolicyIngestionRunModel | None:
+        stmt = (
+            select(PolicyIngestionRunModel)
+            .where(PolicyIngestionRunModel.run_id == run_id)
+            .options(selectinload(PolicyIngestionRunModel.documents).selectinload(PolicyDocumentModel.chunks))
+        )
+        return self.db.scalar(stmt)
+
+    def get_run(self, run_id: str) -> PolicyIngestionRunModel | None:
+        return self.db.get(PolicyIngestionRunModel, run_id)
+
+    def list_audit_events(self, run_id: str) -> list[PolicyAuditEventModel]:
+        stmt = (
+            select(PolicyAuditEventModel)
+            .where(PolicyAuditEventModel.ingestion_run_id == run_id)
+            .order_by(PolicyAuditEventModel.created_at, PolicyAuditEventModel.audit_event_id)
+        )
+        return list(self.db.scalars(stmt))
+
+    def get_chunk(self, chunk_id: str) -> PolicyChunkModel | None:
+        return self.db.scalar(select(PolicyChunkModel).where(PolicyChunkModel.chunk_id == chunk_id))
+
+    def active_corpus(self) -> PolicyCorpusVersionModel | None:
+        return self.db.scalar(
+            select(PolicyCorpusVersionModel).where(PolicyCorpusVersionModel.is_active.is_(True))
+        )
+
+    def add_evaluation(
+        self,
+        *,
+        ingestion_run_id: str,
+        corpus_version: str,
+        index_version: str,
+        passed: bool,
+        metrics: dict[str, object],
+        threshold_failures: list[dict[str, object]],
+        correlation_id: str,
+        now: datetime,
+    ) -> PolicyEvaluationResultModel:
+        evaluation = PolicyEvaluationResultModel(
+            evaluation_id=str(uuid4()),
+            ingestion_run_id=ingestion_run_id,
+            corpus_version=corpus_version,
+            index_version=index_version,
+            passed=passed,
+            metrics=metrics,
+            threshold_failures=threshold_failures,
+            correlation_id=correlation_id,
+            evaluated_at=now,
+        )
+        self.db.add(evaluation)
+        return evaluation
+
+    def promote(
+        self,
+        *,
+        ingestion_run_id: str,
+        corpus_version: str,
+        index_version: str,
+        promoted_by: str,
+        correlation_id: str,
+        now: datetime,
+    ) -> PolicyCorpusVersionModel:
+        for active in self.db.scalars(
+            select(PolicyCorpusVersionModel).where(PolicyCorpusVersionModel.is_active.is_(True))
+        ):
+            active.is_active = False
+        corpus = PolicyCorpusVersionModel(
+            corpus_version_id=str(uuid4()),
+            corpus_version=corpus_version,
+            ingestion_run_id=ingestion_run_id,
+            index_version=index_version,
+            is_active=True,
+            promoted_by=promoted_by,
+            correlation_id=correlation_id,
+            promoted_at=now,
+        )
+        self.db.add(corpus)
+        return corpus
+
+
+class PolicyAuditRepository:
+    def __init__(self, db: Session, fail_writes: bool = False) -> None:
+        self.db = db
+        self.fail_writes = fail_writes
+
+    def append(
+        self,
+        *,
+        event_type: str,
+        actor_ref: str,
+        source: str,
+        decision_status: str,
+        correlation_id: str,
+        now: datetime,
+        ingestion_run_id: str | None = None,
+        document_id: str | None = None,
+        version: str | None = None,
+        checksum_sha256: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> PolicyAuditEventModel:
+        if self.fail_writes:
+            raise AuditWriteError("simulated policy audit write failure")
+        event = PolicyAuditEventModel(
+            audit_event_id=str(uuid4()),
+            ingestion_run_id=ingestion_run_id,
+            document_id=document_id,
+            version=version,
+            checksum_sha256=checksum_sha256,
+            event_type=event_type,
+            actor_ref=actor_ref,
+            source=source,
+            decision_status=decision_status,
+            event_metadata=metadata or {},
+            correlation_id=correlation_id,
+            created_at=now,
+        )
+        self.db.add(event)
+        return event

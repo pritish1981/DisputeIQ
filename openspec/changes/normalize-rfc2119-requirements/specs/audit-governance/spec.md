@@ -10,6 +10,12 @@ The platform SHALL record every material case lifecycle action as an append-only
 - WHEN audit recording executes
 - THEN an append-only business audit event is written independently of application logs
 
+#### Scenario: Phase 002 audit failure blocks accepted mutation
+- **GIVEN** a material Phase 002 case mutation requires an audit event
+- **WHEN** the audit event cannot be persisted in the same accepted operation boundary
+- **THEN** the mutation is not reported as successful
+- **AND** no accepted case or evidence metadata mutation is left without its required business audit event
+
 ### Requirement: Decision reconstruction
 FRD reference: FR-AUD-003, FR-AUD-004
 

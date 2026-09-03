@@ -11,6 +11,12 @@ The platform SHALL determine required, available, missing, stale and conflicting
 - THEN required, available, missing, stale and conflicting evidence are identified
 - AND mandatory completeness status is produced by controlled deterministic logic
 
+#### Scenario: Phase 002 evidence metadata persists without AI analysis
+- **GIVEN** a Phase 002 synthetic duplicate-card case contains evidence metadata
+- **WHEN** evidence metadata is registered or returned
+- **THEN** the metadata is persisted and retrieved without invoking AI-assisted document analysis
+- **AND** any completeness status exposed by Phase 002 is deterministic and marked as preliminary when full workflow evidence gates are not yet enabled
+
 ### Requirement: Missing evidence interrupt
 FRD reference: FR-EVD-004
 

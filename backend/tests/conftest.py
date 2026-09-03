@@ -10,8 +10,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.adapters.models import Base
 from app.api.v1.disputes import get_case_service
+from app.api.v1.policies import get_policy_service
 from app.main import create_app
 from app.services.case_service import CaseService
+from app.services.policy_ingestion import PolicyIngestionService
 
 
 @pytest.fixture()
@@ -36,6 +38,7 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         return CaseService(db_session)
 
     app.dependency_overrides[get_case_service] = override_case_service
+    app.dependency_overrides[get_policy_service] = lambda: PolicyIngestionService(db_session)
     with TestClient(app) as test_client:
         yield test_client
 
