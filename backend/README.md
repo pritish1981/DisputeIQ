@@ -1,7 +1,7 @@
 # Backend
 
-FastAPI/Pydantic Case API and controlled policy ingestion implementation for
-`003-controlled-policy-ingestion`.
+FastAPI/Pydantic Case API, controlled policy ingestion, and hybrid policy
+retrieval implementation through `004-hybrid-policy-retrieval`.
 
 ## Local Checks
 
@@ -59,6 +59,8 @@ Check:
 - `GET /api/v1/policies/ingestions/{run_id}` returns ingestion lineage.
 - `POST /api/v1/policies/promotions` runs mandatory corpus evaluation and promotes a complete candidate.
 - `GET /api/v1/policies/chunks/{chunk_id}/lineage` reconstructs citation lineage.
+- `POST /api/v1/policies/retrievals` deterministically filters the active promoted corpus, runs lexical/vector retrieval, returns ranked cited policy context, or abstains with a policy-review signal.
+- `POST /api/v1/policies/retrieval-evaluations` records retrieval quality, citation correctness, metadata filtering, and stale-policy exclusion threshold results for a retrieval configuration.
 
 Load synthetic policy fixtures with:
 
@@ -66,5 +68,32 @@ Load synthetic policy fixtures with:
 uv run python -m app.policy_fixture_loader
 ```
 
-Do not add LangGraph workflow execution, recommendation, communication, HITL decisioning,
-or financial posting behavior during this change.
+Run the Phase 004 retrieval smoke against the configured PostgreSQL database:
+
+```powershell
+uv run alembic -c alembic.ini current
+uv run python -m app.policy_retrieval_smoke
+```
+
+Expected smoke output includes:
+
+- `retrieval_status` = `retrieved`
+- `selected_citations` with document ID, version, section, chunk hash, corpus version and index version
+- `confidence` above the configured `minimum_confidence`
+- `evaluation.passed` = `True`
+- `telemetry` with correlation ID, candidate count, returned result count and retrieval config version
+- `audit_event_id` for the append-only policy retrieval audit event
+
+Manual Swagger UI validation:
+
+1. Start the API with `uv run uvicorn app.main:app --reload`.
+2. Open `http://127.0.0.1:8000/docs`.
+3. Use `POST /api/v1/policies/ingestions` with `X-Policy-Admin: true` to ingest an approved duplicate-card policy.
+4. Use `POST /api/v1/policies/promotions` to promote the returned ingestion run.
+5. Use `POST /api/v1/policies/retrievals` with effective date `2026-09-04T00:00:00Z`, product `card`, channel `web`, jurisdiction `US`, and a duplicate-card query.
+6. Confirm the response contains ranked results, lexical/vector/fused scores, complete citations, corpus/index versions, retrieval config version, correlation ID and no policy-review requirement.
+7. Repeat retrieval with unmatched metadata or very high `minimum_confidence` and confirm it abstains with `requires_policy_review: true`.
+8. Use `POST /api/v1/policies/retrieval-evaluations` and confirm passing and failing configurations record structured threshold results.
+
+Do not add LangGraph workflow execution, recommendation, communication, durable
+human-review task lifecycle, or financial posting behavior during this change.

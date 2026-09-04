@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 class CaseStatus(StrEnum):
@@ -418,6 +418,128 @@ class PolicyLineageResponse(BaseModel):
     chunk_hash: str
     corpus_version: str | None
     index_version: str | None
+    correlation_id: str
+
+
+class PolicyRetrievalAbstentionReason(StrEnum):
+    missing_active_corpus = "missing_active_corpus"
+    no_eligible_candidates = "no_eligible_candidates"
+    low_confidence = "low_confidence"
+    ambiguous_results = "ambiguous_results"
+    missing_citation = "missing_citation"
+
+
+class PolicyRetrievalConfig(BaseModel):
+    version: str = Field(default="retrieval-config-v1", min_length=1, max_length=80)
+    lexical_weight: float = Field(default=0.45, ge=0.0, le=1.0)
+    vector_weight: float = Field(default=0.55, ge=0.0, le=1.0)
+    top_k: int = Field(default=3, ge=1, le=20)
+    minimum_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    ambiguity_threshold: float = Field(default=0.03, ge=0.0, le=1.0)
+    require_citations: bool = True
+    reranker_mode: str = Field(default="deterministic-fused-score-v1", min_length=1, max_length=80)
+
+    @field_validator("vector_weight")
+    @classmethod
+    def validate_weight_sum(cls, value: float, info: ValidationInfo) -> float:
+        lexical_weight = info.data.get("lexical_weight", 0.45)
+        if abs(float(lexical_weight) + value - 1.0) > 0.000001:
+            raise ValueError("lexical_weight and vector_weight must sum to 1.0")
+        return value
+
+
+class PolicyRetrievalRequest(BaseModel):
+    query: str = Field(min_length=3, max_length=2000)
+    dispute_type: DisputeType = DisputeType.duplicate_card_transaction
+    effective_date: datetime
+    product: str = Field(min_length=1, max_length=80)
+    channel: str = Field(min_length=1, max_length=80)
+    jurisdiction: str = Field(min_length=1, max_length=80)
+    actor_ref: str = Field(default="policy-retrieval-service", min_length=1, max_length=100)
+    case_id: UUID | None = None
+    workflow_id: UUID | None = None
+    dispute_metadata: dict[str, object] = Field(default_factory=dict)
+    retrieval_config: PolicyRetrievalConfig = Field(default_factory=PolicyRetrievalConfig)
+
+    @field_validator("effective_date")
+    @classmethod
+    def normalize_effective_date(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
+class PolicyCitationOut(BaseModel):
+    document_id: str
+    version: str
+    section: str
+    chunk_id: str
+    chunk_hash: str
+    effective_from: datetime
+    effective_to: datetime | None
+    ingestion_run_id: UUID
+    corpus_version: str
+    index_version: str
+
+
+class PolicyRetrievedChunkOut(BaseModel):
+    rank: int
+    chunk_id: str
+    content: str
+    lexical_score: float
+    vector_score: float
+    fused_score: float
+    reranker_mode: str
+    citation: PolicyCitationOut
+
+
+class PolicyReviewSignalOut(BaseModel):
+    required: bool
+    reason: PolicyRetrievalAbstentionReason | None = None
+    message: str | None = None
+
+
+class PolicyRetrievalTelemetryOut(BaseModel):
+    case_id: UUID | None
+    workflow_id: UUID | None
+    correlation_id: str
+    corpus_version: str | None
+    index_version: str | None
+    retrieval_config_version: str
+    eligible_candidate_count: int
+    returned_result_count: int
+    confidence: float
+    abstention_reason: PolicyRetrievalAbstentionReason | None
+    latency_ms: int
+
+
+class PolicyRetrievalResponse(BaseModel):
+    status: str
+    approved_context: bool
+    requires_policy_review: bool
+    confidence: float
+    abstention_reason: PolicyRetrievalAbstentionReason | None = None
+    policy_review: PolicyReviewSignalOut
+    results: list[PolicyRetrievedChunkOut] = Field(default_factory=list)
+    corpus_version: str | None
+    index_version: str | None
+    retrieval_config: PolicyRetrievalConfig
+    correlation_id: str
+    audit_event_id: UUID
+    telemetry: PolicyRetrievalTelemetryOut
+
+
+class PolicyRetrievalEvaluationRequest(BaseModel):
+    actor_ref: str = Field(default="policy-admin:retrieval-eval", min_length=1, max_length=100)
+    retrieval_config: PolicyRetrievalConfig = Field(default_factory=PolicyRetrievalConfig)
+
+
+class PolicyRetrievalEvaluationResponse(BaseModel):
+    accepted: bool
+    corpus_version: str | None
+    index_version: str | None
+    retrieval_config_version: str
+    evaluation: PolicyEvaluationOut
     correlation_id: str
 
 

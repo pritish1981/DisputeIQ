@@ -21,14 +21,19 @@ from app.domain.schemas import (
     PolicyLineageResponse,
     PolicyPromotionRequest,
     PolicyPromotionResponse,
+    PolicyRetrievalEvaluationRequest,
+    PolicyRetrievalEvaluationResponse,
+    PolicyRetrievalRequest,
+    PolicyRetrievalResponse,
 )
 from app.services.policy_ingestion import (
     PolicyAuthorizationError,
     PolicyIngestionService,
     PolicyValidationError,
 )
+from app.services.policy_retrieval import PolicyRetrievalAuditError, PolicyRetrievalService
 
-router = APIRouter(prefix="/api/v1/policies", tags=["policy-ingestion"])
+router = APIRouter(prefix="/api/v1/policies", tags=["policy"])
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     401: {"model": ErrorResponse},
@@ -42,6 +47,12 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 
 def get_policy_service(db: Annotated[Session, Depends(get_db)]) -> PolicyIngestionService:
     return PolicyIngestionService(db)
+
+
+def get_policy_retrieval_service(
+    db: Annotated[Session, Depends(get_db)],
+) -> PolicyRetrievalService:
+    return PolicyRetrievalService(db)
 
 
 def _error(
@@ -180,4 +191,50 @@ def get_policy_chunk_lineage(
         raise _error(404, "POLICY_CHUNK_NOT_FOUND", str(exc), correlation_id) from exc
 
 
-__all__ = ["get_policy_service", "router"]
+@router.post(
+    "/retrievals",
+    response_model=PolicyRetrievalResponse,
+    responses=ERROR_RESPONSES,
+)
+def retrieve_policy_context(
+    request: PolicyRetrievalRequest,
+    response: Response,
+    service: Annotated[PolicyRetrievalService, Depends(get_policy_retrieval_service)],
+    x_policy_admin: Annotated[str | None, Header(alias="X-Policy-Admin")] = None,
+    x_correlation_id: Annotated[str | None, Header(alias=CORRELATION_HEADER)] = None,
+) -> PolicyRetrievalResponse:
+    correlation_id = resolve_correlation_id(x_correlation_id)
+    response.headers[CORRELATION_HEADER] = correlation_id
+    _require_policy_admin(x_policy_admin, correlation_id)
+    try:
+        return service.retrieve(request, correlation_id=correlation_id)
+    except PolicyAuthorizationError as exc:
+        raise _error(403, "POLICY_ADMIN_FORBIDDEN", str(exc), correlation_id) from exc
+    except PolicyRetrievalAuditError as exc:
+        raise _error(500, "POLICY_AUDIT_APPEND_FAILED", str(exc), correlation_id) from exc
+
+
+@router.post(
+    "/retrieval-evaluations",
+    response_model=PolicyRetrievalEvaluationResponse,
+    responses=ERROR_RESPONSES,
+)
+def evaluate_policy_retrieval(
+    request: PolicyRetrievalEvaluationRequest,
+    response: Response,
+    service: Annotated[PolicyRetrievalService, Depends(get_policy_retrieval_service)],
+    x_policy_admin: Annotated[str | None, Header(alias="X-Policy-Admin")] = None,
+    x_correlation_id: Annotated[str | None, Header(alias=CORRELATION_HEADER)] = None,
+) -> PolicyRetrievalEvaluationResponse:
+    correlation_id = resolve_correlation_id(x_correlation_id)
+    response.headers[CORRELATION_HEADER] = correlation_id
+    _require_policy_admin(x_policy_admin, correlation_id)
+    try:
+        return service.evaluate(request, correlation_id=correlation_id)
+    except PolicyAuthorizationError as exc:
+        raise _error(403, "POLICY_ADMIN_FORBIDDEN", str(exc), correlation_id) from exc
+    except PolicyRetrievalAuditError as exc:
+        raise _error(500, "POLICY_AUDIT_APPEND_FAILED", str(exc), correlation_id) from exc
+
+
+__all__ = ["get_policy_retrieval_service", "get_policy_service", "router"]

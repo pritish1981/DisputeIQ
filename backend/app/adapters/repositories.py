@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.adapters.models import (
@@ -51,6 +54,15 @@ class PolicyRunNotFoundError(Exception):
 
 class PolicyPromotionError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class PolicyRetrievalRow:
+    chunk: PolicyChunkModel
+    corpus_version: str
+    index_version: str
+    lexical_score: float
+    vector_score: float
 
 
 class IdempotencyRepository:
@@ -497,6 +509,93 @@ class PolicyRepository:
         embedding_vector: str,
         now: datetime,
     ) -> PolicyChunkModel:
+        if self.db.bind is not None and self.db.bind.dialect.name == "postgresql":
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO policy_chunks (
+                        chunk_id,
+                        policy_document_pk,
+                        document_id,
+                        version,
+                        section,
+                        status,
+                        effective_from,
+                        effective_to,
+                        product,
+                        channel,
+                        jurisdiction,
+                        content,
+                        source_checksum_sha256,
+                        chunk_hash,
+                        parser_version,
+                        chunking_config_hash,
+                        embedding_model,
+                        embedding_config_hash,
+                        embedding_vector,
+                        vector_index_ready,
+                        lexical_index_ready,
+                        ingestion_run_id,
+                        correlation_id,
+                        created_at
+                    )
+                    VALUES (
+                        :chunk_id,
+                        :policy_document_pk,
+                        :document_id,
+                        :version,
+                        :section,
+                        :status,
+                        :effective_from,
+                        :effective_to,
+                        :product,
+                        :channel,
+                        :jurisdiction,
+                        :content,
+                        :source_checksum_sha256,
+                        :chunk_hash,
+                        :parser_version,
+                        :chunking_config_hash,
+                        :embedding_model,
+                        :embedding_config_hash,
+                        CAST(:embedding_vector AS vector),
+                        TRUE,
+                        TRUE,
+                        :ingestion_run_id,
+                        :correlation_id,
+                        :created_at
+                    )
+                    """
+                ),
+                {
+                    "chunk_id": chunk_id,
+                    "policy_document_pk": document.policy_document_pk,
+                    "document_id": document.document_id,
+                    "version": document.version,
+                    "section": section,
+                    "status": document.status,
+                    "effective_from": document.effective_from,
+                    "effective_to": document.effective_to,
+                    "product": document.product,
+                    "channel": document.channel,
+                    "jurisdiction": document.jurisdiction,
+                    "content": content,
+                    "source_checksum_sha256": document.source_checksum_sha256,
+                    "chunk_hash": chunk_hash,
+                    "parser_version": run.parser_version,
+                    "chunking_config_hash": run.chunking_config_hash,
+                    "embedding_model": run.embedding_model,
+                    "embedding_config_hash": run.embedding_config_hash,
+                    "embedding_vector": embedding_vector,
+                    "ingestion_run_id": run.run_id,
+                    "correlation_id": run.correlation_id,
+                    "created_at": now,
+                },
+            )
+            inserted = self.get_chunk(chunk_id)
+            if inserted is None:
+                raise PolicyRunNotFoundError(f"Policy chunk {chunk_id} was not created")
+            return inserted
         chunk = PolicyChunkModel(
             chunk_id=chunk_id,
             policy_document_pk=document.policy_document_pk,
@@ -566,6 +665,191 @@ class PolicyRepository:
         return self.db.scalar(
             select(PolicyCorpusVersionModel).where(PolicyCorpusVersionModel.is_active.is_(True))
         )
+
+    def eligible_chunks(
+        self,
+        *,
+        corpus: PolicyCorpusVersionModel,
+        effective_date: datetime,
+        product: str,
+        channel: str,
+        jurisdiction: str,
+    ) -> list[PolicyChunkModel]:
+        stmt = (
+            select(PolicyChunkModel)
+            .where(
+                PolicyChunkModel.ingestion_run_id == corpus.ingestion_run_id,
+                PolicyChunkModel.status.in_(("approved", "active")),
+                PolicyChunkModel.vector_index_ready.is_(True),
+                PolicyChunkModel.lexical_index_ready.is_(True),
+                PolicyChunkModel.effective_from <= effective_date,
+                (
+                    PolicyChunkModel.effective_to.is_(None)
+                    | (PolicyChunkModel.effective_to >= effective_date)
+                ),
+                PolicyChunkModel.product == product,
+                PolicyChunkModel.channel == channel,
+                PolicyChunkModel.jurisdiction == jurisdiction,
+            )
+            .order_by(
+                PolicyChunkModel.document_id,
+                PolicyChunkModel.version,
+                PolicyChunkModel.section,
+            )
+        )
+        return list(self.db.scalars(stmt))
+
+    def hybrid_retrieve(
+        self,
+        *,
+        corpus: PolicyCorpusVersionModel,
+        query: str,
+        query_embedding: str,
+        effective_date: datetime,
+        product: str,
+        channel: str,
+        jurisdiction: str,
+        limit: int,
+    ) -> list[PolicyRetrievalRow]:
+        if self.db.bind is not None and self.db.bind.dialect.name == "postgresql":
+            return self._postgres_hybrid_retrieve(
+                corpus=corpus,
+                query=query,
+                query_embedding=query_embedding,
+                effective_date=effective_date,
+                product=product,
+                channel=channel,
+                jurisdiction=jurisdiction,
+                limit=limit,
+            )
+        return self._sqlite_hybrid_retrieve(
+            corpus=corpus,
+            query=query,
+            query_embedding=query_embedding,
+            effective_date=effective_date,
+            product=product,
+            channel=channel,
+            jurisdiction=jurisdiction,
+            limit=limit,
+        )
+
+    def _postgres_hybrid_retrieve(
+        self,
+        *,
+        corpus: PolicyCorpusVersionModel,
+        query: str,
+        query_embedding: str,
+        effective_date: datetime,
+        product: str,
+        channel: str,
+        jurisdiction: str,
+        limit: int,
+    ) -> list[PolicyRetrievalRow]:
+        stmt = text(
+            """
+            SELECT
+                c.policy_chunk_pk,
+                LEAST(
+                    1.0,
+                    ts_rank_cd(
+                        c.search_tsvector,
+                        websearch_to_tsquery('english', :query)
+                    ) * 10.0
+                ) AS lexical_score,
+                GREATEST(
+                    0.0,
+                    1.0 - (c.embedding_vector <=> CAST(:query_embedding AS vector))
+                ) AS vector_score
+            FROM policy_chunks c
+            WHERE c.ingestion_run_id = :ingestion_run_id
+              AND c.status IN ('approved', 'active')
+              AND c.vector_index_ready IS TRUE
+              AND c.lexical_index_ready IS TRUE
+              AND c.effective_from <= :effective_date
+              AND (c.effective_to IS NULL OR c.effective_to >= :effective_date)
+              AND c.product = :product
+              AND c.channel = :channel
+              AND c.jurisdiction = :jurisdiction
+            ORDER BY lexical_score DESC, vector_score DESC, c.document_id, c.version, c.section
+            LIMIT :limit
+            """
+        )
+        rows = self.db.execute(
+            stmt,
+            {
+                "query": query,
+                "query_embedding": query_embedding,
+                "ingestion_run_id": corpus.ingestion_run_id,
+                "effective_date": effective_date,
+                "product": product,
+                "channel": channel,
+                "jurisdiction": jurisdiction,
+                "limit": limit,
+            },
+        ).mappings()
+        results: list[PolicyRetrievalRow] = []
+        for row in rows:
+            chunk = self.db.get(PolicyChunkModel, row["policy_chunk_pk"])
+            if chunk is None:
+                continue
+            results.append(
+                PolicyRetrievalRow(
+                    chunk=chunk,
+                    corpus_version=corpus.corpus_version,
+                    index_version=corpus.index_version,
+                    lexical_score=float(row["lexical_score"] or 0.0),
+                    vector_score=float(row["vector_score"] or 0.0),
+                )
+            )
+        return results
+
+    def _sqlite_hybrid_retrieve(
+        self,
+        *,
+        corpus: PolicyCorpusVersionModel,
+        query: str,
+        query_embedding: str,
+        effective_date: datetime,
+        product: str,
+        channel: str,
+        jurisdiction: str,
+        limit: int,
+    ) -> list[PolicyRetrievalRow]:
+        query_terms = _terms(query)
+        query_vector = _parse_vector(query_embedding)
+        rows: list[PolicyRetrievalRow] = []
+        for chunk in self.eligible_chunks(
+            corpus=corpus,
+            effective_date=effective_date,
+            product=product,
+            channel=channel,
+            jurisdiction=jurisdiction,
+        ):
+            chunk_terms = _terms(chunk.content)
+            lexical_score = (
+                len(query_terms & chunk_terms) / len(query_terms) if query_terms else 0.0
+            )
+            vector_score = _cosine(query_vector, _parse_vector(chunk.embedding_vector))
+            rows.append(
+                PolicyRetrievalRow(
+                    chunk=chunk,
+                    corpus_version=corpus.corpus_version,
+                    index_version=corpus.index_version,
+                    lexical_score=round(lexical_score, 6),
+                    vector_score=round(vector_score, 6),
+                )
+            )
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.lexical_score,
+                row.vector_score,
+                row.chunk.document_id,
+                row.chunk.version,
+                row.chunk.section,
+            ),
+            reverse=True,
+        )[:limit]
 
     def add_evaluation(
         self,
@@ -659,3 +943,25 @@ class PolicyAuditRepository:
         )
         self.db.add(event)
         return event
+
+
+def _terms(value: str) -> set[str]:
+    return {term for term in re.findall(r"[a-z0-9]+", value.lower()) if len(term) > 2}
+
+
+def _parse_vector(value: str) -> list[float]:
+    stripped = value.strip().removeprefix("[").removesuffix("]")
+    if not stripped:
+        return []
+    return [float(item) for item in stripped.split(",")]
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    dot = sum(a * b for a, b in zip(left, right, strict=True))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return max(0.0, min(1.0, dot / (left_norm * right_norm)))

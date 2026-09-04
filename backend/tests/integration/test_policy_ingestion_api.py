@@ -121,6 +121,108 @@ def test_policy_ingestion_promotes_and_reconstructs_lineage(client: TestClient) 
     assert lineage.json()["correlation_id"] == "corr-lineage"
 
 
+def test_policy_retrieval_api_returns_ranked_cited_context(client: TestClient) -> None:
+    run = ingest_policy(client)
+    promotion = client.post(
+        "/api/v1/policies/promotions",
+        json={
+            "ingestion_run_id": run["run_id"],
+            "actor_ref": "policy-admin:synthetic",
+            "corpus_version": "policy-corpus-retrieval-api",
+            "index_version": "policy-index-retrieval-api",
+        },
+        headers=POLICY_ADMIN,
+    )
+    assert promotion.status_code == 200
+
+    retrieval = client.post(
+        "/api/v1/policies/retrievals",
+        json={
+            "query": "duplicate card transaction issuer review merchant context",
+            "effective_date": datetime(2026, 9, 4, tzinfo=UTC).isoformat(),
+            "product": "card",
+            "channel": "web",
+            "jurisdiction": "US",
+            "actor_ref": "policy-retrieval:api",
+            "retrieval_config": {"ambiguity_threshold": 0.0},
+        },
+        headers={"X-Policy-Admin": "true", "X-Correlation-ID": "corr-retrieval-api"},
+    )
+
+    assert retrieval.status_code == 200, retrieval.text
+    body = retrieval.json()
+    assert body["status"] == "retrieved"
+    assert body["approved_context"] is True
+    assert body["requires_policy_review"] is False
+    assert body["correlation_id"] == "corr-retrieval-api"
+    assert body["corpus_version"] == "policy-corpus-retrieval-api"
+    assert body["results"][0]["citation"]["document_id"] == "POL-DUP-CARD"
+    assert body["results"][0]["citation"]["section"] == "7.5.1"
+    assert body["results"][0]["lexical_score"] > 0
+    assert body["results"][0]["vector_score"] > 0
+    assert body["telemetry"]["eligible_candidate_count"] == 2
+
+
+def test_policy_retrieval_api_abstains_and_requires_authorization(
+    client: TestClient,
+) -> None:
+    payload = {
+        "query": "duplicate card transaction issuer review",
+        "effective_date": datetime(2026, 9, 4, tzinfo=UTC).isoformat(),
+        "product": "card",
+        "channel": "web",
+        "jurisdiction": "US",
+    }
+    unauthorized = client.post("/api/v1/policies/retrievals", json=payload)
+    missing_corpus = client.post(
+        "/api/v1/policies/retrievals",
+        json=payload,
+        headers={"X-Policy-Admin": "true", "X-Correlation-ID": "corr-missing-corpus"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["error_code"] == "POLICY_ADMIN_AUTH_REQUIRED"
+    assert missing_corpus.status_code == 200
+    assert missing_corpus.json()["status"] == "abstained"
+    assert missing_corpus.json()["abstention_reason"] == "missing_active_corpus"
+    assert missing_corpus.json()["requires_policy_review"] is True
+
+
+def test_policy_retrieval_evaluation_api_records_threshold_results(
+    client: TestClient,
+) -> None:
+    run = ingest_policy(client)
+    client.post(
+        "/api/v1/policies/promotions",
+        json={
+            "ingestion_run_id": run["run_id"],
+            "actor_ref": "policy-admin:synthetic",
+            "corpus_version": "policy-corpus-eval-api",
+            "index_version": "policy-index-eval-api",
+        },
+        headers=POLICY_ADMIN,
+    )
+    passing = client.post(
+        "/api/v1/policies/retrieval-evaluations",
+        json={"actor_ref": "policy-admin:eval"},
+        headers={"X-Policy-Admin": "true", "X-Correlation-ID": "corr-eval-api-pass"},
+    )
+    failing = client.post(
+        "/api/v1/policies/retrieval-evaluations",
+        json={
+            "actor_ref": "policy-admin:eval",
+            "retrieval_config": {"minimum_confidence": 0.99},
+        },
+        headers={"X-Policy-Admin": "true", "X-Correlation-ID": "corr-eval-api-fail"},
+    )
+
+    assert passing.status_code == 200, passing.text
+    assert passing.json()["accepted"] is True
+    assert failing.status_code == 200, failing.text
+    assert failing.json()["accepted"] is False
+    assert failing.json()["evaluation"]["threshold_failures"]
+
+
 def test_policy_validation_rejects_unapproved_inactive_and_non_policy_sources(
     client: TestClient,
 ) -> None:

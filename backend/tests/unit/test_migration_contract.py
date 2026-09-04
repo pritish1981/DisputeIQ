@@ -50,3 +50,17 @@ def test_phase_003_migration_covers_policy_ingestion_and_database_indexes() -> N
         "ix_policy_chunks_embedding_vector",
     ]
     assert all(token in migration for token in required_tokens)
+
+
+def test_phase_004_retrieval_uses_postgresql_fts_and_pgvector_sql() -> None:
+    repository = (
+        Path(__file__).resolve().parents[2] / "app" / "adapters" / "repositories.py"
+    ).read_text(encoding="utf-8")
+    required_tokens = [
+        "search_tsvector",
+        "websearch_to_tsquery",
+        "ts_rank_cd",
+        "embedding_vector <=> CAST(:query_embedding AS vector)",
+        "CAST(:embedding_vector AS vector)",
+    ]
+    assert all(token in repository for token in required_tokens)
