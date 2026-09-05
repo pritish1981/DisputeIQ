@@ -50,11 +50,13 @@ class PolicyRetrievalService:
         repository: PolicyRepository | None = None,
         audit_repository: PolicyAuditRepository | None = None,
         embedding_adapter: DeterministicEmbeddingAdapter | None = None,
+        auto_commit: bool = True,
     ) -> None:
         self.db = db
         self.repository = repository or PolicyRepository(db)
         self.audit_repository = audit_repository or PolicyAuditRepository(db)
         self.embedding_adapter = embedding_adapter or DeterministicEmbeddingAdapter()
+        self.auto_commit = auto_commit
 
     def retrieve(
         self,
@@ -210,7 +212,8 @@ class PolicyRetrievalService:
                 "telemetry": telemetry.model_dump(mode="json"),
             },
         )
-        self.db.commit()
+        if self.auto_commit:
+            self.db.commit()
         return PolicyRetrievalResponse(
             status="retrieved",
             approved_context=True,
@@ -313,7 +316,8 @@ class PolicyRetrievalService:
             correlation_id=correlation_id,
             now=now,
         )
-        self.db.commit()
+        if self.auto_commit:
+            self.db.commit()
         return PolicyRetrievalEvaluationResponse(
             accepted=not failures,
             corpus_version=None if corpus_version == "none" else corpus_version,
@@ -374,7 +378,8 @@ class PolicyRetrievalService:
                 "telemetry": telemetry.model_dump(mode="json"),
             },
         )
-        self.db.commit()
+        if self.auto_commit:
+            self.db.commit()
         return PolicyRetrievalResponse(
             status="abstained",
             approved_context=False,

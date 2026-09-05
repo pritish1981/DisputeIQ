@@ -11,10 +11,12 @@ from sqlalchemy.pool import StaticPool
 from app.adapters.models import Base
 from app.api.v1.disputes import get_case_service
 from app.api.v1.policies import get_policy_retrieval_service, get_policy_service
+from app.api.v1.workflows import get_workflow_service
 from app.main import create_app
 from app.services.case_service import CaseService
 from app.services.policy_ingestion import PolicyIngestionService
 from app.services.policy_retrieval import PolicyRetrievalService
+from app.services.workflow_service import WorkflowService
 
 
 @pytest.fixture()
@@ -43,6 +45,7 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_policy_retrieval_service] = lambda: PolicyRetrievalService(
         db_session
     )
+    app.dependency_overrides[get_workflow_service] = lambda: WorkflowService(db_session)
     with TestClient(app) as test_client:
         yield test_client
 

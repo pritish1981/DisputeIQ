@@ -148,6 +148,61 @@ class AuditEventModel(Base):
     case: Mapped[CaseModel] = relationship(back_populates="audit_events")
 
 
+class WorkflowRunModel(Base):
+    __tablename__ = "workflow_runs"
+    __table_args__ = (
+        Index("ix_workflow_runs_case_status", "case_id", "status"),
+        Index("ix_workflow_runs_correlation", "correlation_id"),
+    )
+
+    workflow_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.case_id"), nullable=False)
+    graph_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    current_node: Mapped[str] = mapped_column(String(120), nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    checkpoint_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    interrupt_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    telemetry: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    correlation_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    started_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    checkpoints: Mapped[list[WorkflowCheckpointModel]] = relationship(
+        back_populates="workflow_run", cascade="all, delete-orphan"
+    )
+
+
+class WorkflowCheckpointModel(Base):
+    __tablename__ = "workflow_checkpoints"
+    __table_args__ = (
+        Index("uq_workflow_checkpoint_seq", "workflow_id", "checkpoint_seq", unique=True),
+        Index("ix_workflow_checkpoint_state", "workflow_id", "state_version"),
+        Index("ix_workflow_checkpoint_created", "workflow_id", "created_at"),
+    )
+
+    checkpoint_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_runs.workflow_id"), nullable=False
+    )
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.case_id"), nullable=False)
+    checkpoint_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_node: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    state_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    interrupt_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    side_effect_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    telemetry: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    correlation_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    workflow_run: Mapped[WorkflowRunModel] = relationship(back_populates="checkpoints")
+
+
 class PolicyIngestionRunModel(Base):
     __tablename__ = "policy_ingestion_runs"
     __table_args__ = (

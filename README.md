@@ -1,6 +1,6 @@
 # DisputeIQ
 
-DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 003 adds controlled policy ingestion so approved, versioned, active policy documents can be validated, chunked, embedded, indexed, evaluated, promoted, and audited before later retrieval and workflow phases consume the corpus.
+DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 005 adds bounded LangGraph state and workflow orchestration so submitted duplicate-card cases can be explicitly started, checkpointed, interrupted, resumed, audited, and correlated while authoritative facts, policy controls, human decisions, communications, and financial posting remain outside autonomous workflow authority.
 
 ## Source of Truth
 
@@ -14,9 +14,27 @@ Use this hierarchy when requirements disagree:
 
 Stop and reconcile a conflict before implementing the lower-level source.
 
-## Current Phase 003 Scope
+## Current Phase 005 Scope
 
-Phase 003 includes the Phase 002 Case API baseline plus controlled policy ingestion.
+Phase 005 includes the Phase 002 Case API baseline, Phase 003 controlled policy ingestion, Phase 004 controlled hybrid policy retrieval, and the first bounded LangGraph workflow slice.
+
+## Recent Changes
+
+Latest archived change: `005-langgraph-state-workflow`.
+
+Recent capability additions:
+
+- Phase 004 added controlled hybrid policy retrieval over approved active corpora, combining deterministic applicability filters, PostgreSQL FTS, pgvector similarity, fused scoring, confidence/ambiguity thresholds, citations, audit, and retrieval evaluation.
+- Phase 005 added bounded LangGraph orchestration for submitted duplicate-card cases with durable PostgreSQL workflow runs/checkpoints, compact state, idempotent start/resume APIs, optimistic workflow state-version checks, audit-visible workflow events, and telemetry.
+- Phase 005 intentionally stops before recommendation generation, durable HITL assignment, customer communication, finalization, and financial posting.
+
+Latest local validation snapshot:
+
+- Backend quality checks passed: `uv run ruff check .`, `uv run mypy app tests`, and `uv run pytest` with `63 passed`.
+- Live PostgreSQL migration reached `20260905_0005 (head)`.
+- Workflow smoke passed through submitted case creation, workflow start, intake, deterministic classification, authoritative-context references, evidence gate, policy retrieval, and controlled Phase 005 stop.
+- OpenSpec long-lived specs passed with `18 passed, 0 failed` after archiving Phase 005.
+- `validate --all --strict` still reports `18 passed, 1 failed` because the separate active `normalize-rfc2119-requirements` change has stale `policy-rag` MODIFIED deltas.
 
 Case API support:
 
@@ -38,7 +56,30 @@ Controlled policy ingestion support:
 - evaluation-gated promotion that preserves the last active corpus when validation, indexing, audit, or mandatory thresholds fail
 - synthetic fixture loader through `uv run python -m app.policy_fixture_loader`
 
-This change does not execute LangGraph, generate recommendations, perform HITL decisioning, send communications, or expose refund, credit, debit, chargeback, or financial-posting operations.
+Hybrid policy retrieval support:
+
+- protected read-only retrieval endpoints under `/api/v1/policies`
+- deterministic eligibility filtering before retrieval by active corpus, policy status, effective date, product, channel, jurisdiction, and readiness metadata
+- PostgreSQL full-text search scoring through generated `search_tsvector` plus `websearch_to_tsquery`/`ts_rank_cd`
+- pgvector similarity scoring through stored vector embeddings and cosine-distance ordering
+- deterministic lexical/vector score fusion with versioned retrieval configuration, top-k, confidence threshold, ambiguity threshold, citation requirement, and reranker mode
+- ranked policy context with document ID, version, section, chunk ID, chunk hash, ingestion run ID, corpus version, index version, scores, correlation ID, and telemetry
+- abstention and `requires_policy_review` responses for missing active corpus, no eligible candidates, low confidence, ambiguous results, or incomplete citation lineage
+- append-only policy retrieval audit events for success and abstention
+- retrieval regression evaluation for quality, citation correctness, metadata filtering, and stale-policy exclusion
+- synthetic retrieval smoke through `uv run python -m app.policy_retrieval_smoke`
+
+LangGraph workflow support:
+
+- explicit workflow start/detail/resume endpoints under `/api/v1/workflows`
+- durable PostgreSQL `workflow_runs` and `workflow_checkpoints` separate from case business state, policy knowledge, Redis, and audit
+- compact workflow state with case ID, workflow ID, graph version, state version, correlation ID, stage summaries, side-effect keys, interrupt metadata, errors, and telemetry
+- bounded graph stages for intake, deterministic duplicate-card classification routing, authoritative-context reference capture, evidence gating, policy-context resolution, and controlled Phase 005 stop
+- safe idempotent start/resume behavior with optimistic `If-Match` workflow state-version checks
+- workflow audit-visible events and telemetry for starts, checkpoints, interrupts, resumes, current node, checkpoint sequence, state version, graph version, and correlation ID
+- synthetic workflow smoke through `uv run python -m app.workflow_smoke`
+
+This change does not generate recommendations, persist durable HITL tasks, send communications, call model providers directly, or expose refund, credit, debit, chargeback, or financial-posting operations.
 
 ## Prerequisites
 
@@ -95,7 +136,11 @@ docker compose exec -T postgres psql `
   -c "SELECT version_num FROM alembic_version;"
 ```
 
-The Phase 003 head revision is `20260903_0003`.
+The Phase 005 head revision is `20260905_0005`.
+
+Phase 005 adds workflow run and checkpoint tables over the Phase 004 runtime. The
+live retrieval path still depends on the Phase 003 pgvector
+`policy_chunks.embedding_vector` column and generated `search_tsvector` column.
 
 If `alembic_version` does not exist, try the normal online migration from `backend/`:
 
@@ -137,7 +182,8 @@ docker compose exec -T postgres psql `
 Expected application tables include `audit_events`, `cases`, `evidence_metadata`,
 `idempotency_records`, `provider_context`, `timeline_entries`,
 `policy_ingestion_runs`, `policy_documents`, `policy_chunks`,
-`policy_corpus_versions`, `policy_evaluation_results`, and `policy_audit_events`.
+`policy_corpus_versions`, `policy_evaluation_results`, `policy_audit_events`,
+`workflow_runs`, and `workflow_checkpoints`.
 
 ### 3. Start the Backend
 
@@ -410,6 +456,71 @@ Remove-Item Env:DATABASE_URL
 Set-Location ..
 ```
 
+## Hybrid Policy Retrieval Smoke Test
+
+Keep the backend running on port `8001` and promote a policy corpus first. You can use
+the ingestion smoke above, or run the checked-in Phase 004 smoke directly against the
+configured PostgreSQL database:
+
+```powershell
+Set-Location backend
+$env:DATABASE_URL = "postgresql+psycopg://disputeiq:disputeiq@127.0.0.1:5433/disputeiq"
+uv run python -m app.policy_retrieval_smoke
+Remove-Item Env:DATABASE_URL
+Set-Location ..
+```
+
+Expected smoke output:
+
+- `retrieval_status` is `retrieved`
+- `selected_citations` contains document ID, version, section, chunk ID, chunk hash, ingestion run ID, corpus version, and index version
+- `confidence` is above the configured `minimum_confidence`
+- `evaluation.passed` is `True`
+- `telemetry` includes correlation ID, eligible candidate count, returned result count, corpus/index versions, retrieval config version, and latency
+- `audit_event_id` identifies the append-only policy retrieval audit event
+- stale and wrong-product fixtures are listed as excluded fixture IDs
+
+Manual retrieval API validation from Swagger UI:
+
+1. Open `http://127.0.0.1:8001/docs`.
+2. Use `POST /api/v1/policies/ingestions` with `X-Policy-Admin: true` to ingest an approved duplicate-card policy.
+3. Use `POST /api/v1/policies/promotions` to promote the returned ingestion run.
+4. Use `POST /api/v1/policies/retrievals` with effective date `2026-09-04T00:00:00Z`, product `card`, channel `web`, jurisdiction `US`, and a duplicate-card query.
+5. Confirm the response includes ranked results, lexical/vector/fused scores, complete citations, corpus/index versions, retrieval config version, correlation ID, telemetry, and `requires_policy_review: false`.
+6. Repeat retrieval with unmatched product/channel/jurisdiction or a very high `minimum_confidence` and confirm the response abstains with `requires_policy_review: true`.
+7. Use `POST /api/v1/policies/retrieval-evaluations` and confirm passing and failing retrieval configurations record structured threshold results.
+
+## LangGraph Workflow Smoke Test
+
+Keep PostgreSQL running and apply the latest migration first:
+
+```powershell
+Set-Location backend
+$env:DATABASE_URL = "postgresql+psycopg://disputeiq:disputeiq@127.0.0.1:5433/disputeiq"
+uv run alembic -c alembic.ini upgrade head
+uv run python -m app.workflow_smoke
+Remove-Item Env:DATABASE_URL
+Set-Location ..
+```
+
+Expected smoke output:
+
+- `status` is `CONTROLLED_STOP` when an applicable promoted policy corpus exists, or `WAITING_POLICY_REVIEW` when no active corpus is available
+- `workflow_id`, `case_id`, `state_version`, `checkpoint_seq`, and `correlation_id` are present
+- `stage_summaries` includes intake, deterministic classification, authoritative-context references, evidence gating, and policy context when available
+- `interrupt` records the controlled Phase 005 stop or review requirement
+- `telemetry` includes workflow ID, current node, checkpoint count, interrupt count, status, graph version, state version, and correlation ID
+
+Manual workflow API validation from Swagger UI:
+
+1. Open `http://127.0.0.1:8001/docs`.
+2. Create or reuse a submitted duplicate-card case from `POST /api/v1/cases`.
+3. Use `POST /api/v1/workflows` with `Idempotency-Key` and the case ID.
+4. Confirm the response includes workflow ID, status, current node, state version, graph version, latest checkpoint, interrupt metadata, stage summaries, telemetry, and correlation ID.
+5. Repeat the same start request with the same idempotency key and payload; confirm the original workflow response is replayed.
+6. Use `GET /api/v1/workflows/{workflow_id}` and confirm the persisted checkpoint and stage summaries are returned.
+7. Use `POST /api/v1/workflows/{workflow_id}/resume` with stale `If-Match`; confirm a structured conflict response and no state mutation.
+
 ## Validate the Project
 
 ### Backend
@@ -423,7 +534,7 @@ uv run mypy app tests
 uv run pytest
 ```
 
-Expected result: Ruff passes, mypy reports no issues, and pytest reports `41 passed`.
+Expected result: Ruff passes, mypy reports no issues, and pytest reports `63 passed`.
 
 Focused backend checks:
 
@@ -434,7 +545,10 @@ uv run pytest tests/unit/test_synthetic_providers.py
 uv run pytest tests/integration/test_api.py
 uv run pytest tests/integration/test_architecture_boundaries.py
 uv run pytest tests/integration/test_policy_ingestion_api.py
+uv run pytest tests/integration/test_workflow_api.py
 uv run pytest tests/unit/test_policy_ingestion_service.py
+uv run pytest tests/unit/test_policy_retrieval_service.py
+uv run pytest tests/unit/test_workflow_graph.py
 ```
 
 ### Frontend
@@ -492,6 +606,15 @@ Open `http://127.0.0.1:8001/docs`. The canonical `cases` group must expose:
 - `POST /api/v1/cases/{case_id}/evidence`
 - `GET /api/v1/cases/{case_id}/evidence`
 - `GET /api/v1/cases/{case_id}/timeline`
+
+The `policies` group must expose protected ingestion, promotion, retrieval, evaluation,
+and lineage routes under `/api/v1/policies`.
+
+The `workflows` group must expose:
+
+- `POST /api/v1/workflows`
+- `GET /api/v1/workflows/{workflow_id}`
+- `POST /api/v1/workflows/{workflow_id}/resume`
 
 The `/api/v1/disputes` create/retrieve routes remain visible only as deprecated
 compatibility delegates.
@@ -565,7 +688,60 @@ Latest validation snapshot:
 - `uv run python -m app.policy_ingestion_smoke`: passed through `validated -> chunked -> embedded -> indexed -> evaluated -> promoted -> audited`
 - `uv run alembic -c alembic.ini upgrade head`: upgraded Compose PostgreSQL to `20260903_0003`
 - PostgreSQL verification confirmed `vector`, policy tables, lexical GIN indexing, and vector cosine indexing
-- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict`: `18 passed, 0 failed`
+- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict`: `18 passed, 0 failed` at Phase 003 archive time
+
+## Phase 004 Validation Evidence
+
+The completed OpenSpec change is archived at
+`openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval`.
+Its approved deltas are synced into the long-lived specs under `openspec/specs/`.
+
+| Task group | Primary validation |
+| --- | --- |
+| 1. Gap review | `docs/implementation/phase-004-hybrid-policy-retrieval-gap-review.md` |
+| 2. Retrieval contracts/configuration | Schema, API, and service tests |
+| 3. Eligibility and database retrieval | PostgreSQL FTS/pgvector SQL guard, service tests, live smoke |
+| 4. Citations/confidence/audit | `uv run pytest tests/unit/test_policy_retrieval_service.py` |
+| 5. API/smoke/evaluation | `uv run pytest tests/integration/test_policy_ingestion_api.py` and `uv run python -m app.policy_retrieval_smoke` |
+| 6. Documentation/final validation | Backend checks, long-lived spec validation, and archived task checklist |
+
+Latest validation snapshot:
+
+- `uv run ruff check .`: passed
+- `uv run mypy app tests`: passed with no issues in 35 source files
+- `uv run pytest`: `52 passed`
+- `uv run alembic -c alembic.ini current`: `20260903_0003 (head)`
+- `uv run python -m app.policy_retrieval_smoke`: passed through `promoted corpus -> deterministic eligibility -> PostgreSQL lexical search -> pgvector similarity -> fusion/rerank -> cited context -> confidence/audit/evaluation`
+- Smoke output included `retrieval_status: retrieved`, confidence `0.541734`, selected citations, telemetry, audit event ID, and `evaluation.passed: True`
+- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict`: `17 passed, 0 failed`
+- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict`: `17 passed, 1 failed` because of the pre-existing active `normalize-rfc2119-requirements` change
+
+## Phase 005 Validation Evidence
+
+The completed OpenSpec change is archived at
+`openspec/changes/archive/2026-09-05-005-langgraph-state-workflow`.
+Its approved deltas are synced into the long-lived specs under `openspec/specs/`.
+
+| Task group | Primary validation |
+| --- | --- |
+| 1. Gap review | `docs/implementation/phase-005-langgraph-state-workflow-gap-review.md` |
+| 2. Workflow persistence | Alembic revision/table/index checks, repository tests, and migration contract tests |
+| 3. State contract | Workflow schema tests and compact checkpoint-state validation |
+| 4. Graph construction | `uv run pytest tests/unit/test_workflow_graph.py` |
+| 5. Workflow service/API | `uv run pytest tests/integration/test_workflow_api.py` and `uv run python -m app.workflow_smoke` |
+| 6. Boundaries/docs/final validation | Architecture-boundary tests, backend checks, OpenSpec archive, and long-lived spec validation |
+
+Latest validation snapshot:
+
+- `uv sync`: passed
+- `uv run ruff check .`: passed
+- `uv run mypy app tests`: passed with no issues in 41 source files
+- `uv run pytest`: `63 passed`
+- `uv run alembic -c alembic.ini current`: `20260905_0005 (head)`
+- `uv run python -m app.workflow_smoke`: passed through submitted case creation, workflow start, intake, deterministic classification, authoritative-context references, evidence gate, policy retrieval and controlled Phase 005 stop
+- Smoke output included `status: CONTROLLED_STOP`, `current_node: controlled_stop`, `state_version: 3`, `checkpoint_seq: 2`, six authoritative-context references, retrieved policy context, correlation ID and workflow telemetry
+- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict`: `18 passed, 0 failed`
+- `npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict`: `18 passed, 1 failed` because of the separate active `normalize-rfc2119-requirements` change
 
 ## OpenSpec Status and Commands
 
@@ -582,21 +758,30 @@ npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict
 
 Expected result:
 
-- Phase 001, Phase 002, and Phase 003 are absent from the active-change list because they are archived.
+- Phase 001, Phase 002, Phase 003, Phase 004, and Phase 005 are absent from the active-change list because they are archived.
 - `normalize-rfc2119-requirements` is the only active change and its checklist is complete.
-- Strict long-lived-spec validation reports `17 passed, 0 failed`.
+- Strict long-lived-spec validation reports `18 passed, 0 failed`.
 
-`validate --all --strict` also validates every active change and now reports
-`18 passed, 0 failed`.
+`validate --all --strict` also validates every active change. In the latest Phase 005
+snapshot it reports `18 passed, 1 failed` because `normalize-rfc2119-requirements`
+is still an active stale normalization change after newer specs were synced.
+That active change currently omits newer `policy-rag` scenarios from its MODIFIED
+requirements, including no-applicable-policy candidates, hybrid lexical/vector
+retrieval, stale-policy exclusion, citation lineage, missing active corpus, and
+missing-citation continuation gates.
 
-Inspect the archived artifacts and completed Phase 002/Phase 003 checklists with:
+Inspect the archived artifacts and completed Phase 002/Phase 003/Phase 004/Phase 005 checklists with:
 
 ```powershell
 Get-ChildItem openspec/changes/archive/2026-08-30-001-platform-foundation
 Get-ChildItem openspec/changes/archive/2026-08-30-002-case-api-persistence
 Get-ChildItem openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion
+Get-ChildItem openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval
+Get-ChildItem openspec/changes/archive/2026-09-05-005-langgraph-state-workflow
 rg -n "^- \[x\]" openspec/changes/archive/2026-08-30-002-case-api-persistence/tasks.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion/tasks.md
+rg -n "^- \[x\]" openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval/tasks.md
+rg -n "^- \[x\]" openspec/changes/archive/2026-09-05-005-langgraph-state-workflow/tasks.md
 ```
 
 ### Start a Future Change

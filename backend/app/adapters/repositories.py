@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -22,6 +24,8 @@ from app.adapters.models import (
     PolicyIngestionRunModel,
     ProviderContextModel,
     TimelineEntryModel,
+    WorkflowCheckpointModel,
+    WorkflowRunModel,
 )
 from app.adapters.synthetic_providers import ProviderRecord
 from app.domain.schemas import (
@@ -53,6 +57,14 @@ class PolicyRunNotFoundError(Exception):
 
 
 class PolicyPromotionError(Exception):
+    pass
+
+
+class WorkflowConflictError(Exception):
+    pass
+
+
+class WorkflowRunNotFoundError(Exception):
     pass
 
 
@@ -394,6 +406,147 @@ class TimelineRepository:
                 item.timeline_entry_id,
             ),
         )
+
+
+class WorkflowRepository:
+    ACTIVE_STATUSES = frozenset(
+        {
+            "RUNNING",
+            "WAITING_EVIDENCE",
+            "WAITING_POLICY_REVIEW",
+            "WAITING_MANUAL_CLASSIFICATION",
+            "MANUAL_PROCESSING",
+            "CONTROLLED_STOP",
+        }
+    )
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    def active_for_case(self, case_id: str) -> WorkflowRunModel | None:
+        return self.db.scalar(
+            select(WorkflowRunModel)
+            .where(
+                WorkflowRunModel.case_id == case_id,
+                WorkflowRunModel.status.in_(self.ACTIVE_STATUSES),
+            )
+            .order_by(WorkflowRunModel.started_at.desc())
+        )
+
+    def create_run(
+        self,
+        *,
+        case_id: str,
+        graph_version: str,
+        correlation_id: str,
+        actor_ref: str,
+        now: datetime,
+    ) -> WorkflowRunModel:
+        existing = self.active_for_case(case_id)
+        if existing is not None:
+            raise WorkflowConflictError(f"Case {case_id} already has an active workflow")
+        run = WorkflowRunModel(
+            workflow_id=str(uuid4()),
+            case_id=case_id,
+            graph_version=graph_version,
+            status="RUNNING",
+            current_node="start",
+            state_version=1,
+            checkpoint_seq=0,
+            interrupt_reason=None,
+            telemetry={},
+            correlation_id=correlation_id,
+            started_by=actor_ref,
+            started_at=now,
+            updated_at=now,
+            completed_at=None,
+        )
+        self.db.add(run)
+        self.db.flush()
+        return run
+
+    def get(self, workflow_id: str) -> WorkflowRunModel | None:
+        return self.db.get(WorkflowRunModel, workflow_id)
+
+    def get_detail(self, workflow_id: str) -> WorkflowRunModel | None:
+        stmt = (
+            select(WorkflowRunModel)
+            .where(WorkflowRunModel.workflow_id == workflow_id)
+            .options(selectinload(WorkflowRunModel.checkpoints))
+        )
+        return self.db.scalar(stmt)
+
+    def latest_checkpoint(self, workflow_id: str) -> WorkflowCheckpointModel | None:
+        return self.db.scalar(
+            select(WorkflowCheckpointModel)
+            .where(WorkflowCheckpointModel.workflow_id == workflow_id)
+            .order_by(WorkflowCheckpointModel.checkpoint_seq.desc())
+        )
+
+    def append_checkpoint(
+        self,
+        *,
+        run: WorkflowRunModel,
+        state: dict[str, object],
+        current_node: str,
+        status: str,
+        interrupt_reason: str | None,
+        side_effect_keys: list[str],
+        telemetry: dict[str, object],
+        correlation_id: str,
+        now: datetime,
+    ) -> WorkflowCheckpointModel:
+        next_seq = run.checkpoint_seq + 1
+        next_version = run.state_version + 1
+        telemetry = {
+            **telemetry,
+            "state_version": next_version,
+            "checkpoint_count": next_seq,
+        }
+        state_hash = self.hash_state(state)
+        checkpoint = WorkflowCheckpointModel(
+            checkpoint_id=str(uuid4()),
+            workflow_id=run.workflow_id,
+            case_id=run.case_id,
+            checkpoint_seq=next_seq,
+            state_version=next_version,
+            current_node=current_node,
+            status=status,
+            state_json=state,
+            state_hash=state_hash,
+            interrupt_reason=interrupt_reason,
+            side_effect_keys=side_effect_keys,
+            telemetry=telemetry,
+            correlation_id=correlation_id,
+            created_at=now,
+        )
+        run.status = status
+        run.current_node = current_node
+        run.state_version = next_version
+        run.checkpoint_seq = next_seq
+        run.interrupt_reason = interrupt_reason
+        run.telemetry = telemetry
+        run.updated_at = now
+        if status in {"COMPLETED", "CONTROLLED_STOP"}:
+            run.completed_at = now
+        self.db.add(checkpoint)
+        self.db.flush()
+        return checkpoint
+
+    def compare_state_version(self, workflow_id: str, expected_version: int) -> WorkflowRunModel:
+        run = self.get(workflow_id)
+        if run is None:
+            raise WorkflowRunNotFoundError(workflow_id)
+        if run.state_version != expected_version:
+            raise WorkflowConflictError(
+                f"Workflow version does not match expected version {expected_version}"
+            )
+        return run
+
+    @staticmethod
+    def hash_state(state: dict[str, object]) -> str:
+        payload = json.dumps(state, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def utc_now() -> datetime:

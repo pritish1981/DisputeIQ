@@ -9,8 +9,11 @@ from app.domain.schemas import (
     CaseStatus,
     CreateCaseRequest,
     DisputeType,
+    WorkflowResumeRequest,
+    WorkflowStartRequest,
     parse_if_match,
     validate_case_transition,
+    validate_workflow_state_payload,
 )
 
 
@@ -63,3 +66,23 @@ def test_phase_002_lifecycle_and_if_match_controls() -> None:
     assert parse_if_match('W/"2"') == 2
     with pytest.raises(ValueError):
         parse_if_match("not-a-version")
+
+
+def test_workflow_start_and_resume_schemas(valid_payload: dict[str, object]) -> None:
+    case_id = "11111111-1111-4111-8111-111111111111"
+    start = WorkflowStartRequest.model_validate({"case_id": case_id})
+    assert str(start.case_id) == case_id
+    assert start.graph_version == "duplicate-card-workflow-v1"
+
+    resume = WorkflowResumeRequest.model_validate(
+        {"resume_reason": "policy_review_complete", "resume_payload": {"approved": True}}
+    )
+    assert resume.resume_payload["approved"] is True
+
+
+def test_workflow_state_payload_rejects_disallowed_or_oversized_fields() -> None:
+    validate_workflow_state_payload({"case_id": "case-1", "stage_summaries": {}})
+    with pytest.raises(ValueError):
+        validate_workflow_state_payload({"provider_payloads": []})
+    with pytest.raises(ValueError):
+        validate_workflow_state_payload({"case_id": "case-1", "notes": "x" * 20001})

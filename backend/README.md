@@ -1,7 +1,8 @@
 # Backend
 
-FastAPI/Pydantic Case API, controlled policy ingestion, and hybrid policy
-retrieval implementation through `004-hybrid-policy-retrieval`.
+FastAPI/Pydantic Case API, controlled policy ingestion, hybrid policy
+retrieval, and bounded LangGraph workflow orchestration through
+`005-langgraph-state-workflow`.
 
 ## Local Checks
 
@@ -29,6 +30,8 @@ The migrations create durable PostgreSQL business, audit, and policy corpus tabl
 - policy corpus versions
 - policy evaluation results
 - policy audit events
+- workflow runs
+- workflow checkpoints
 
 Run migrations from `backend/`:
 
@@ -61,6 +64,9 @@ Check:
 - `GET /api/v1/policies/chunks/{chunk_id}/lineage` reconstructs citation lineage.
 - `POST /api/v1/policies/retrievals` deterministically filters the active promoted corpus, runs lexical/vector retrieval, returns ranked cited policy context, or abstains with a policy-review signal.
 - `POST /api/v1/policies/retrieval-evaluations` records retrieval quality, citation correctness, metadata filtering, and stale-policy exclusion threshold results for a retrieval configuration.
+- `POST /api/v1/workflows` explicitly starts a bounded duplicate-card investigation workflow for an existing submitted case.
+- `GET /api/v1/workflows/{workflow_id}` returns workflow status, current node, state version, checkpoint, interrupt, stage summary, errors and telemetry.
+- `POST /api/v1/workflows/{workflow_id}/resume` resumes an interrupted workflow with `Idempotency-Key` and `If-Match` workflow state-version checks.
 
 Load synthetic policy fixtures with:
 
@@ -84,6 +90,20 @@ Expected smoke output includes:
 - `telemetry` with correlation ID, candidate count, returned result count and retrieval config version
 - `audit_event_id` for the append-only policy retrieval audit event
 
+Run the Phase 005 workflow smoke against the configured PostgreSQL database:
+
+```powershell
+uv run alembic -c alembic.ini upgrade head
+uv run python -m app.workflow_smoke
+```
+
+Expected smoke output includes:
+
+- `workflow_id`, `case_id`, `state_version`, `checkpoint_seq` and `correlation_id`
+- stage summaries for intake, deterministic classification, authoritative-context references and evidence gating
+- a controlled `WAITING_POLICY_REVIEW` interrupt when no promoted policy corpus exists, or `CONTROLLED_STOP` before recommendation/HITL/communication/finalization when policy context is available
+- telemetry with workflow ID, current node, checkpoint count, interrupt count and status
+
 Manual Swagger UI validation:
 
 1. Start the API with `uv run uvicorn app.main:app --reload`.
@@ -95,5 +115,6 @@ Manual Swagger UI validation:
 7. Repeat retrieval with unmatched metadata or very high `minimum_confidence` and confirm it abstains with `requires_policy_review: true`.
 8. Use `POST /api/v1/policies/retrieval-evaluations` and confirm passing and failing configurations record structured threshold results.
 
-Do not add LangGraph workflow execution, recommendation, communication, durable
-human-review task lifecycle, or financial posting behavior during this change.
+Phase 005 adds bounded LangGraph workflow execution only. Do not add
+recommendation, communication, durable human-review task lifecycle, direct
+model-provider calls, or financial posting behavior during this change.

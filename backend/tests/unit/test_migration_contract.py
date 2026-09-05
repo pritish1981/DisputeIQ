@@ -64,3 +64,24 @@ def test_phase_004_retrieval_uses_postgresql_fts_and_pgvector_sql() -> None:
         "CAST(:embedding_vector AS vector)",
     ]
     assert all(token in repository for token in required_tokens)
+
+
+def test_phase_005_migration_covers_workflow_state_and_checkpoints() -> None:
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "alembic"
+        / "versions"
+        / "20260905_0005_langgraph_state_workflow.py"
+    ).read_text(encoding="utf-8")
+    required_tokens = [
+        "workflow_runs",
+        "workflow_checkpoints",
+        "uq_workflow_active_case",
+        "checkpoint_seq",
+        "state_version",
+        "state_json",
+        "state_hash",
+        "side_effect_keys",
+        "ix_workflow_checkpoint_state",
+    ]
+    assert all(token in migration for token in required_tokens)

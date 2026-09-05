@@ -543,6 +543,108 @@ class PolicyRetrievalEvaluationResponse(BaseModel):
     correlation_id: str
 
 
+class WorkflowStatus(StrEnum):
+    running = "RUNNING"
+    waiting_evidence = "WAITING_EVIDENCE"
+    waiting_policy_review = "WAITING_POLICY_REVIEW"
+    waiting_manual_classification = "WAITING_MANUAL_CLASSIFICATION"
+    manual_processing = "MANUAL_PROCESSING"
+    controlled_stop = "CONTROLLED_STOP"
+    completed = "COMPLETED"
+    failed = "FAILED"
+
+
+class WorkflowFailureKind(StrEnum):
+    retriable = "retriable"
+    manual_degradation = "manual_degradation"
+    validation = "validation"
+    fatal = "fatal"
+
+
+class WorkflowStartRequest(BaseModel):
+    case_id: UUID
+    actor_ref: str = Field(default="workflow-service", min_length=1, max_length=100)
+    graph_version: str = Field(default="duplicate-card-workflow-v1", min_length=1, max_length=80)
+
+
+class WorkflowResumeRequest(BaseModel):
+    actor_ref: str = Field(default="workflow-service", min_length=1, max_length=100)
+    resume_reason: str = Field(default="authorized_resume", min_length=1, max_length=120)
+    resume_payload: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowInterruptOut(BaseModel):
+    required: bool = False
+    reason: str | None = None
+    message: str | None = None
+    resume_requirements: list[str] = Field(default_factory=list)
+
+
+class WorkflowCheckpointOut(BaseModel):
+    checkpoint_id: UUID
+    checkpoint_seq: int
+    state_version: int
+    current_node: str
+    status: WorkflowStatus
+    state_hash: str
+    interrupt_reason: str | None = None
+    side_effect_keys: list[str] = Field(default_factory=list)
+    telemetry: dict[str, object] = Field(default_factory=dict)
+    correlation_id: str
+    created_at: datetime
+
+
+class WorkflowTelemetryOut(BaseModel):
+    case_id: UUID
+    workflow_id: UUID
+    graph_version: str
+    current_node: str
+    state_version: int
+    correlation_id: str
+    node_count: int
+    checkpoint_count: int
+    interrupt_count: int
+    retry_count: int = 0
+    status: WorkflowStatus
+    latency_ms: int = 0
+
+
+class WorkflowResponse(BaseModel):
+    workflow_id: UUID
+    case_id: UUID
+    status: WorkflowStatus
+    current_node: str
+    state_version: int
+    graph_version: str
+    correlation_id: str
+    checkpoint: WorkflowCheckpointOut | None = None
+    interrupt: WorkflowInterruptOut = Field(default_factory=WorkflowInterruptOut)
+    stage_summaries: dict[str, object] = Field(default_factory=dict)
+    error_metadata: list[dict[str, object]] = Field(default_factory=list)
+    telemetry: WorkflowTelemetryOut
+    replayed: bool = False
+
+
+def validate_workflow_state_payload(state: dict[str, object]) -> dict[str, object]:
+    forbidden_keys = {
+        "provider_payloads",
+        "evidence_binary",
+        "evidence_binaries",
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+    }
+    if len(str(state)) > 20000:
+        raise ValueError("workflow state payload is too large")
+    lowered = {str(key).lower() for key in state}
+    blocked = lowered & forbidden_keys
+    if blocked:
+        blocked_fields = ", ".join(sorted(blocked))
+        raise ValueError(f"workflow state contains disallowed field(s): {blocked_fields}")
+    return state
+
+
 def parse_if_match(value: str) -> int:
     normalized = value.strip()
     match = re.fullmatch(r'(?:W/)?"?(\d+)"?', normalized)

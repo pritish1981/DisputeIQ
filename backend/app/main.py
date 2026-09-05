@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1.cases import router as cases_router
 from app.api.v1.disputes import router as disputes_router
 from app.api.v1.policies import router as policies_router
+from app.api.v1.workflows import router as workflows_router
 from app.core.correlation import CORRELATION_HEADER, resolve_correlation_id
 
 
@@ -35,8 +36,8 @@ def create_app() -> FastAPI:
         title="DisputeIQ API",
         version="0.3.0",
         description=(
-            "Deterministic case APIs and controlled policy ingestion "
-            "for synthetic pilot data."
+            "Deterministic case APIs, controlled policy retrieval, and "
+            "bounded workflow orchestration for synthetic pilot data."
         ),
     )
 
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(cases_router)
     app.include_router(disputes_router)
     app.include_router(policies_router)
+    app.include_router(workflows_router)
     return app
 
 

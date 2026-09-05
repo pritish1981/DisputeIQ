@@ -112,6 +112,34 @@ def test_openapi_exposes_no_financial_posting_surface(client: TestClient) -> Non
     assert not any(term in route_text for term in forbidden_terms)
 
 
+def test_phase_005_workflow_exposes_no_autonomous_financial_or_ai_surface() -> None:
+    app_root = Path(__file__).resolve().parents[2] / "app"
+    workflow_files = [
+        app_root / "api" / "v1" / "workflows.py",
+        app_root / "services" / "workflow_service.py",
+        app_root / "services" / "workflow_graph.py",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in workflow_files)
+    lowered = combined.lower()
+
+    forbidden_terms = [
+        "openai",
+        "anthropic",
+        "model_gateway.invoke",
+        "recommendation_service",
+        "communication_service",
+        "send_customer",
+        "refund(",
+        "credit(",
+        "debit(",
+        "chargeback(",
+        "settlement_post",
+    ]
+    assert not any(term in lowered for term in forbidden_terms)
+    assert "langgraph" in lowered
+    assert "financial_outcome_finalized" in lowered
+
+
 def test_durable_phase_002_records_are_not_redis_backed() -> None:
     app_root = Path(__file__).resolve().parents[2] / "app"
     python_files = [path for path in app_root.rglob("*.py") if path.is_file()]
