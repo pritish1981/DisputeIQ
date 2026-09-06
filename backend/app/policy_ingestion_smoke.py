@@ -54,8 +54,7 @@ def run_smoke() -> dict[str, object]:
         lineage.raise_for_status()
         return {
             "path": (
-                "validated -> chunked -> embedded -> indexed -> "
-                "evaluated -> promoted -> audited"
+                "validated -> chunked -> embedded -> indexed -> evaluated -> promoted -> audited"
             ),
             "run_id": run["run_id"],
             "run_status": run["status"],

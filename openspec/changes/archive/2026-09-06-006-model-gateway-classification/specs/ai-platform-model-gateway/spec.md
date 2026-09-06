@@ -1,9 +1,4 @@
-# AI Platform and Model Gateway
-
-## Purpose
-Define centralized model access, prompt/config governance, response validation and kill switch.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Central model gateway
 FRD reference: FR-AIP-001, FR-AIP-002, FR-ARC-007
@@ -57,6 +52,8 @@ The platform SHALL provide an operator-controlled AI kill switch that safely byp
 - **GIVEN** the AI kill switch bypasses an AI-assisted capability
 - **WHEN** the workflow is checkpointed or the API response is returned
 - **THEN** the response and audit-visible lineage identify the bypass reason, capability, configuration version and correlation ID
+
+## ADDED Requirements
 
 ### Requirement: Prompt and model configuration governance
 FRD reference: FR-AIP-003, FR-AIP-005, FR-AUD-003, FR-OBS-005

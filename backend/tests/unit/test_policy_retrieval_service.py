@@ -225,11 +225,14 @@ def test_retrieval_audit_failure_blocks_successful_response(db_session: Session)
     with pytest.raises(PolicyRetrievalAuditError):
         service.retrieve(retrieval_request(), correlation_id="corr-audit-fail")
 
-    assert db_session.scalar(
-        select(PolicyAuditEventModel).where(
-            PolicyAuditEventModel.event_type == "POLICY_RETRIEVAL_COMPLETED"
+    assert (
+        db_session.scalar(
+            select(PolicyAuditEventModel).where(
+                PolicyAuditEventModel.event_type == "POLICY_RETRIEVAL_COMPLETED"
+            )
         )
-    ) is None
+        is None
+    )
 
 
 def test_retrieval_regression_records_passing_and_failing_thresholds(

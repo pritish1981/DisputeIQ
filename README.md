@@ -1,6 +1,6 @@
 # DisputeIQ
 
-DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 005 adds bounded LangGraph state and workflow orchestration so submitted duplicate-card cases can be explicitly started, checkpointed, interrupted, resumed, audited, and correlated while authoritative facts, policy controls, human decisions, communications, and financial posting remain outside autonomous workflow authority.
+DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 006 adds a governed Model Gateway and AI-assisted classification so submitted disputes can be classified through provider-neutral, schema-validated, auditable model access while authoritative facts, policy controls, human decisions, communications, and financial posting remain outside autonomous workflow authority.
 
 ## Source of Truth
 
@@ -14,26 +14,28 @@ Use this hierarchy when requirements disagree:
 
 Stop and reconcile a conflict before implementing the lower-level source.
 
-## Current Phase 005 Scope
+## Current Phase 006 Scope
 
-Phase 005 includes the Phase 002 Case API baseline, Phase 003 controlled policy ingestion, Phase 004 controlled hybrid policy retrieval, and the first bounded LangGraph workflow slice.
+Phase 006 includes the Phase 002 Case API baseline, Phase 003 controlled policy ingestion, Phase 004 controlled hybrid policy retrieval, Phase 005 bounded LangGraph workflow orchestration, and the first Model Gateway-backed classification slice.
 
 ## Recent Changes
 
-Latest archived change: `005-langgraph-state-workflow`.
+Latest archived change: `openspec/changes/archive/2026-09-06-006-model-gateway-classification`.
 
 Recent capability additions:
 
 - Phase 004 added controlled hybrid policy retrieval over approved active corpora, combining deterministic applicability filters, PostgreSQL FTS, pgvector similarity, fused scoring, confidence/ambiguity thresholds, citations, audit, and retrieval evaluation.
 - Phase 005 added bounded LangGraph orchestration for submitted duplicate-card cases with durable PostgreSQL workflow runs/checkpoints, compact state, idempotent start/resume APIs, optimistic workflow state-version checks, audit-visible workflow events, and telemetry.
-- Phase 005 intentionally stops before recommendation generation, durable HITL assignment, customer communication, finalization, and financial posting.
+- Phase 006 adds a central Model Gateway, deterministic local provider adapter, versioned classification schema, prompt/schema/route lineage, token/data-policy checks, fallback metadata, kill-switch bypass, and classification for duplicate-card, failed-UPI, and ATM debit-without-cash disputes.
+- Phase 006 intentionally stops before recommendation generation, durable HITL assignment, customer communication, finalization, and financial posting.
 
 Latest local validation snapshot:
 
-- Backend quality checks passed: `uv run ruff check .`, `uv run mypy app tests`, and `uv run pytest` with `63 passed`.
+- Backend quality checks passed: `uv run ruff check .`, `uv run mypy app tests`, and `uv run pytest` with `76 passed`.
 - Live PostgreSQL migration reached `20260905_0005 (head)`.
-- Workflow smoke passed through submitted case creation, workflow start, intake, deterministic classification, authoritative-context references, evidence gate, policy retrieval, and controlled Phase 005 stop.
-- OpenSpec long-lived specs passed with `18 passed, 0 failed` after archiving Phase 005.
+- Classification evaluation passed through supported category, unsupported, low-confidence, kill-switch, fallback, and malformed-output cases.
+- Workflow smoke passed through submitted case creation, workflow start, intake, Model Gateway classification, authoritative-context references, evidence gate, policy retrieval, and controlled Phase 006 stop.
+- OpenSpec Phase 006 change validation passed before archive, and post-archive long-lived spec validation reports `18 passed, 0 failed`.
 - `validate --all --strict` still reports `18 passed, 1 failed` because the separate active `normalize-rfc2119-requirements` change has stale `policy-rag` MODIFIED deltas.
 
 Case API support:
@@ -74,12 +76,22 @@ LangGraph workflow support:
 - explicit workflow start/detail/resume endpoints under `/api/v1/workflows`
 - durable PostgreSQL `workflow_runs` and `workflow_checkpoints` separate from case business state, policy knowledge, Redis, and audit
 - compact workflow state with case ID, workflow ID, graph version, state version, correlation ID, stage summaries, side-effect keys, interrupt metadata, errors, and telemetry
-- bounded graph stages for intake, deterministic duplicate-card classification routing, authoritative-context reference capture, evidence gating, policy-context resolution, and controlled Phase 005 stop
+- bounded graph stages for intake, Model Gateway classification routing, authoritative-context reference capture, evidence gating, policy-context resolution, and controlled Phase 006 stop
 - safe idempotent start/resume behavior with optimistic `If-Match` workflow state-version checks
 - workflow audit-visible events and telemetry for starts, checkpoints, interrupts, resumes, current node, checkpoint sequence, state version, graph version, and correlation ID
 - synthetic workflow smoke through `uv run python -m app.workflow_smoke`
 
-This change does not generate recommendations, persist durable HITL tasks, send communications, call model providers directly, or expose refund, credit, debit, chargeback, or financial-posting operations.
+Model Gateway and classification support:
+
+- provider-neutral Model Gateway request/response contracts and deterministic local classification provider
+- versioned prompt, schema and model-route metadata for classification
+- classification for duplicate-card, failed-UPI and ATM debit-without-cash dispute descriptions
+- configured confidence threshold, token budget, timeout, retry/fallback and AI kill-switch controls
+- manual-classification routing for low confidence, unsupported category, malformed output, provider failure, missing configuration and kill-switch bypass
+- correlated classification telemetry and audit-visible workflow lineage
+- deterministic classification evaluation through `uv run python -m app.classification_eval`
+
+This change does not generate recommendations, persist durable HITL tasks, send communications, call model providers directly from business/workflow code, or expose refund, credit, debit, chargeback, or financial-posting operations.
 
 ## Prerequisites
 
@@ -498,6 +510,7 @@ Keep PostgreSQL running and apply the latest migration first:
 Set-Location backend
 $env:DATABASE_URL = "postgresql+psycopg://disputeiq:disputeiq@127.0.0.1:5433/disputeiq"
 uv run alembic -c alembic.ini upgrade head
+uv run python -m app.classification_eval
 uv run python -m app.workflow_smoke
 Remove-Item Env:DATABASE_URL
 Set-Location ..
@@ -507,16 +520,17 @@ Expected smoke output:
 
 - `status` is `CONTROLLED_STOP` when an applicable promoted policy corpus exists, or `WAITING_POLICY_REVIEW` when no active corpus is available
 - `workflow_id`, `case_id`, `state_version`, `checkpoint_seq`, and `correlation_id` are present
-- `stage_summaries` includes intake, deterministic classification, authoritative-context references, evidence gating, and policy context when available
-- `interrupt` records the controlled Phase 005 stop or review requirement
+- `stage_summaries` includes intake, Model Gateway classification, authoritative-context references, evidence gating, and policy context when available
+- classification metadata includes `category`, `confidence`, `schema_version`, `prompt_version`, `model_route_version`, token usage, provider route reference and confidence threshold
+- `interrupt` records the controlled Phase 006 stop, policy-review requirement, or manual-classification requirement
 - `telemetry` includes workflow ID, current node, checkpoint count, interrupt count, status, graph version, state version, and correlation ID
 
 Manual workflow API validation from Swagger UI:
 
 1. Open `http://127.0.0.1:8001/docs`.
-2. Create or reuse a submitted duplicate-card case from `POST /api/v1/cases`.
+2. Create or reuse a submitted duplicate-card, failed-UPI, or ATM debit-without-cash case from `POST /api/v1/cases`.
 3. Use `POST /api/v1/workflows` with `Idempotency-Key` and the case ID.
-4. Confirm the response includes workflow ID, status, current node, state version, graph version, latest checkpoint, interrupt metadata, stage summaries, telemetry, and correlation ID.
+4. Confirm the response includes workflow ID, status, current node, state version, graph version, latest checkpoint, classification stage summary, interrupt metadata, telemetry, and correlation ID.
 5. Repeat the same start request with the same idempotency key and payload; confirm the original workflow response is replayed.
 6. Use `GET /api/v1/workflows/{workflow_id}` and confirm the persisted checkpoint and stage summaries are returned.
 7. Use `POST /api/v1/workflows/{workflow_id}/resume` with stale `If-Match`; confirm a structured conflict response and no state mutation.
@@ -758,19 +772,16 @@ npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict
 
 Expected result:
 
-- Phase 001, Phase 002, Phase 003, Phase 004, and Phase 005 are absent from the active-change list because they are archived.
+- Phase 001, Phase 002, Phase 003, Phase 004, Phase 005, and Phase 006 are absent from the active-change list because they are archived.
 - `normalize-rfc2119-requirements` is the only active change and its checklist is complete.
 - Strict long-lived-spec validation reports `18 passed, 0 failed`.
 
-`validate --all --strict` also validates every active change. In the latest Phase 005
+`validate --all --strict` also validates every active change. In the latest Phase 006
 snapshot it reports `18 passed, 1 failed` because `normalize-rfc2119-requirements`
 is still an active stale normalization change after newer specs were synced.
-That active change currently omits newer `policy-rag` scenarios from its MODIFIED
-requirements, including no-applicable-policy candidates, hybrid lexical/vector
-retrieval, stale-policy exclusion, citation lineage, missing active corpus, and
-missing-citation continuation gates.
+That active change currently fails independently of the archived Phase 006 work.
 
-Inspect the archived artifacts and completed Phase 002/Phase 003/Phase 004/Phase 005 checklists with:
+Inspect the archived artifacts and completed Phase 002/Phase 003/Phase 004/Phase 005/Phase 006 checklists with:
 
 ```powershell
 Get-ChildItem openspec/changes/archive/2026-08-30-001-platform-foundation
@@ -778,10 +789,12 @@ Get-ChildItem openspec/changes/archive/2026-08-30-002-case-api-persistence
 Get-ChildItem openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion
 Get-ChildItem openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval
 Get-ChildItem openspec/changes/archive/2026-09-05-005-langgraph-state-workflow
+Get-ChildItem openspec/changes/archive/2026-09-06-006-model-gateway-classification
 rg -n "^- \[x\]" openspec/changes/archive/2026-08-30-002-case-api-persistence/tasks.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion/tasks.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval/tasks.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-09-05-005-langgraph-state-workflow/tasks.md
+rg -n "^- \[x\]" openspec/changes/archive/2026-09-06-006-model-gateway-classification/tasks.md
 ```
 
 ### Start a Future Change

@@ -74,9 +74,7 @@ def run_smoke() -> dict[str, object]:
             "corpus_version": corpus_version,
             "index_version": index_version,
             "retrieval_config_version": body["retrieval_config"]["version"],
-            "selected_citations": [
-                item["citation"] for item in body["results"]
-            ],
+            "selected_citations": [item["citation"] for item in body["results"]],
             "retrieval_status": body["status"],
             "abstention_reason": body["abstention_reason"],
             "telemetry": body["telemetry"],

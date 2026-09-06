@@ -84,9 +84,7 @@ def test_policy_ingestion_promotes_and_reconstructs_lineage(client: TestClient) 
     assert chunk["vector_index_ready"] is True
     assert chunk["lexical_index_ready"] is True
     assert "embedding_vector" not in chunk
-    assert [event["event_type"] for event in run["audit_events"]] == [
-        "POLICY_INGESTION_ACCEPTED"
-    ]
+    assert [event["event_type"] for event in run["audit_events"]] == ["POLICY_INGESTION_ACCEPTED"]
 
     fetched = client.get(
         f"/api/v1/policies/ingestions/{run['run_id']}",

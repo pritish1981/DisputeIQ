@@ -7,6 +7,9 @@ from uuid import uuid4
 import pytest
 
 from app.domain.schemas import (
+    ClassificationDecision,
+    ClassificationOutput,
+    ModelGatewayTelemetry,
     PolicyRetrievalAbstentionReason,
     PolicyRetrievalConfig,
     PolicyRetrievalResponse,
@@ -129,9 +132,48 @@ def _policy_response(state: Any, *, requires_review: bool) -> PolicyRetrievalRes
     )
 
 
+def _classification_decision(
+    state: Any,
+    *,
+    category: str = "duplicate_card_transaction",
+    confidence: float = 0.92,
+    accepted: bool = True,
+) -> ClassificationDecision:
+    output = ClassificationOutput.model_validate(
+        {
+            "category": category,
+            "confidence": confidence,
+            "correlation_id": str(state["correlation_id"]),
+        }
+    )
+    return ClassificationDecision(
+        accepted=accepted,
+        output=output,
+        manual_classification_required=not accepted,
+        reason=None if accepted else "low_confidence",
+        threshold=0.7,
+        telemetry=ModelGatewayTelemetry(
+            capability="classification",
+            case_id=state["case_id"],
+            workflow_id=state["workflow_id"],
+            correlation_id=str(state["correlation_id"]),
+            provider_route_ref="deterministic-local",
+            prompt_version="classification-router-v1",
+            schema_version="classification-output-v1",
+            latency_ms=1,
+            token_usage={"input": 10, "output": 4},
+            attempt_count=1,
+            fallback_used=False,
+            kill_switch_enabled=False,
+            status="accepted",
+        ),
+    )
+
+
 def test_graph_interrupts_for_missing_evidence() -> None:
     graph = build_workflow_graph(
-        retrieve_policy=lambda state: _policy_response(state, requires_review=False)
+        classify_dispute=lambda state: _classification_decision(state),
+        retrieve_policy=lambda state: _policy_response(state, requires_review=False),
     )
     result = graph.invoke(_base_state(evidence=False))
     assert result["status"] == "WAITING_EVIDENCE"
@@ -140,18 +182,59 @@ def test_graph_interrupts_for_missing_evidence() -> None:
 
 def test_graph_stops_at_policy_review_or_phase_boundary() -> None:
     review_graph = build_workflow_graph(
-        retrieve_policy=lambda state: _policy_response(state, requires_review=True)
+        classify_dispute=lambda state: _classification_decision(state),
+        retrieve_policy=lambda state: _policy_response(state, requires_review=True),
     )
     review_result = review_graph.invoke(_base_state())
     assert review_result["status"] == "WAITING_POLICY_REVIEW"
 
     success_graph = build_workflow_graph(
-        retrieve_policy=lambda state: _policy_response(state, requires_review=False)
+        classify_dispute=lambda state: _classification_decision(state),
+        retrieve_policy=lambda state: _policy_response(state, requires_review=False),
     )
     success_result = success_graph.invoke(_base_state())
     assert success_result["status"] == "CONTROLLED_STOP"
     controlled_stop = success_result["stage_summaries"]["controlled_stop"]
     assert controlled_stop["financial_outcome_finalized"] is False
+
+
+def test_graph_interrupts_for_low_confidence_classification() -> None:
+    graph = build_workflow_graph(
+        classify_dispute=lambda state: _classification_decision(
+            state, confidence=0.41, accepted=False
+        ),
+        retrieve_policy=lambda state: _policy_response(state, requires_review=False),
+    )
+    result = graph.invoke(_base_state())
+    assert result["status"] == "WAITING_MANUAL_CLASSIFICATION"
+    assert result["interrupt"]["reason"] == "manual_classification"
+    assert "authoritative_context" not in result["stage_summaries"]
+
+
+def test_graph_reuses_completed_classification_side_effect() -> None:
+    state = _base_state()
+    key = f"classification:{state['case_id']}:classification-output-v1:classification-router-v1"
+    state["side_effect_keys"] = [key]
+    state["stage_summaries"] = {
+        "classification": {
+            "category": "duplicate_card_transaction",
+            "confidence": 0.92,
+            "accepted": True,
+        }
+    }
+    calls = {"classification": 0}
+
+    def classify(state: Any) -> ClassificationDecision:
+        calls["classification"] += 1
+        return _classification_decision(state)
+
+    graph = build_workflow_graph(
+        classify_dispute=classify,
+        retrieve_policy=lambda state: _policy_response(state, requires_review=False),
+    )
+    result = graph.invoke(state)
+    assert result["status"] == "CONTROLLED_STOP"
+    assert calls["classification"] == 0
 
 
 def test_node_tool_allow_list_denies_unapproved_operations() -> None:

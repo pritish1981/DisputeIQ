@@ -60,21 +60,20 @@ def test_evidence_idempotency_conflict_has_no_additional_side_effect(
         "uploader_ref": "customer:cust_1001",
     }
     headers = {"Idempotency-Key": "idem-evidence-conflict", "If-Match": "1"}
-    accepted = client.post(
-        f"/api/v1/cases/{case_id}/evidence", json=evidence, headers=headers
-    )
+    accepted = client.post(f"/api/v1/cases/{case_id}/evidence", json=evidence, headers=headers)
     changed = dict(evidence)
     changed["file_name"] = "different.png"
-    conflict = client.post(
-        f"/api/v1/cases/{case_id}/evidence", json=changed, headers=headers
-    )
+    conflict = client.post(f"/api/v1/cases/{case_id}/evidence", json=changed, headers=headers)
 
     assert accepted.status_code == 201
     assert conflict.status_code == 409
     assert conflict.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
     assert client.get(f"/api/v1/cases/{case_id}/evidence").json()["total"] == 1
     detail = client.get(f"/api/v1/cases/{case_id}").json()
-    assert sum(
-        event["event_type"] == "EVIDENCE_METADATA_REGISTERED"
-        for event in detail["audit_events"]
-    ) == 1
+    assert (
+        sum(
+            event["event_type"] == "EVIDENCE_METADATA_REGISTERED"
+            for event in detail["audit_events"]
+        )
+        == 1
+    )

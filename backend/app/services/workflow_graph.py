@@ -6,7 +6,7 @@ from typing import Any, Literal, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
 
-from app.domain.schemas import PolicyRetrievalResponse
+from app.domain.schemas import ClassificationDecision, PolicyRetrievalResponse
 
 GRAPH_VERSION = "duplicate-card-workflow-v1"
 
@@ -40,7 +40,7 @@ class WorkflowState(TypedDict, total=False):
 
 ALLOWED_NODE_OPERATIONS: dict[str, frozenset[str]] = {
     "intake": frozenset({"case.read"}),
-    "classification": frozenset({"classification.deterministic"}),
+    "classification": frozenset({"classification.model_gateway"}),
     "authoritative_context": frozenset({"provider_context.reference"}),
     "evidence_gate": frozenset({"evidence.evaluate"}),
     "policy_context": frozenset({"policy.retrieve"}),
@@ -95,6 +95,7 @@ def _side_effects(state: WorkflowState) -> list[str]:
 
 def build_workflow_graph(
     *,
+    classify_dispute: Callable[[WorkflowState], ClassificationDecision],
     retrieve_policy: Callable[[WorkflowState], PolicyRetrievalResponse],
 ) -> Any:
     graph = StateGraph(WorkflowState)
@@ -114,21 +115,67 @@ def build_workflow_graph(
 
     def classification(state: WorkflowState) -> WorkflowState:
         started = perf_counter()
-        authorize_node_operation("classification", "classification.deterministic")
-        case = state["case"]
-        if case["dispute_type"] != "duplicate_card_transaction":
+        authorize_node_operation("classification", "classification.model_gateway")
+        expected_key = (
+            f"classification:{state['case_id']}:classification-output-v1:classification-router-v1"
+        )
+        if expected_key in _side_effects(state) and "classification" in _stage_summaries(state):
+            _record_node(state, node_name="classification", started=started)
+            return state
+        decision = classify_dispute(state)
+        telemetry = decision.telemetry.model_dump(mode="json")
+        if decision.output is not None:
+            output = decision.output.model_dump(mode="json")
+            _stage_summaries(state)["classification"] = {
+                "category": output["category"],
+                "confidence": output["confidence"],
+                "supporting_attributes": output["supporting_attributes"],
+                "schema_version": output["schema_version"],
+                "prompt_version": output["prompt_version"],
+                "model_route_version": output["model_route_version"],
+                "correlation_id": output["correlation_id"],
+                "threshold": decision.threshold,
+                "accepted": decision.accepted,
+                "telemetry": telemetry,
+                "evaluation_metadata": decision.evaluation_metadata,
+            }
+        else:
+            _stage_summaries(state)["classification"] = {
+                "category": None,
+                "confidence": None,
+                "threshold": decision.threshold,
+                "accepted": False,
+                "reason": decision.reason.value if decision.reason is not None else None,
+                "telemetry": telemetry,
+                "evaluation_metadata": decision.evaluation_metadata,
+            }
+        key = (
+            f"classification:{state['case_id']}:"
+            f"{telemetry['schema_version']}:{telemetry['prompt_version']}"
+        )
+        if decision.accepted and key not in _side_effects(state):
+            _side_effects(state).append(key)
+        if decision.manual_classification_required:
             state["status"] = "WAITING_MANUAL_CLASSIFICATION"
             state["interrupt"] = {
                 "required": True,
                 "reason": "manual_classification",
-                "message": "Unsupported dispute category requires manual classification.",
+                "message": "Classification requires authorized manual review before continuation.",
                 "resume_requirements": ["authorized_manual_classification"],
             }
-        else:
-            _stage_summaries(state)["classification"] = {
-                "category": "duplicate_card_transaction",
-                "confidence": 1.0,
-                "classification_mode": "deterministic-phase-005",
+        elif (
+            decision.output is not None
+            and decision.output.category.value != "duplicate_card_transaction"
+        ):
+            state["status"] = "CONTROLLED_STOP"
+            state["interrupt"] = {
+                "required": True,
+                "reason": "category_downstream_out_of_scope",
+                "message": (
+                    "Phase 006 classifies this supported category but downstream "
+                    "workflow stages are not yet enabled for it."
+                ),
+                "resume_requirements": ["future_phase_category_workflow"],
             }
         _record_node(state, node_name="classification", started=started)
         return state
@@ -219,7 +266,7 @@ def build_workflow_graph(
             "required": True,
             "reason": "recommendation_human_decision_out_of_scope",
             "message": (
-                "Phase 005 stops before recommendation, durable human decision, "
+                "Phase 006 stops before recommendation, durable human decision, "
                 "communication and financial finalization."
             ),
             "resume_requirements": ["future_phase_recommendation_and_hitl"],
@@ -233,7 +280,7 @@ def build_workflow_graph(
         return state
 
     def after_classification(state: WorkflowState) -> str:
-        if state.get("status") == "WAITING_MANUAL_CLASSIFICATION":
+        if state.get("status") in {"WAITING_MANUAL_CLASSIFICATION", "CONTROLLED_STOP"}:
             return END
         return "authoritative_context"
 

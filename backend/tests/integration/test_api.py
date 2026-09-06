@@ -58,9 +58,7 @@ def test_create_retrieve_and_replay_case(
         "settlement",
         "transaction",
     ]
-    assert sum(
-        event["event_type"] == "CASE_CREATED" for event in body["audit_events"]
-    ) == 1
+    assert sum(event["event_type"] == "CASE_CREATED" for event in body["audit_events"]) == 1
 
 
 def test_legacy_dispute_routes_delegate_to_case_service(
@@ -98,7 +96,7 @@ def test_create_validation_and_error_contracts(
     assert missing_key.json()["error_code"] == "MISSING_IDEMPOTENCY_KEY"
 
     unsupported = deepcopy(valid_payload)
-    unsupported["dispute_type"] = "failed_upi_transfer"
+    unsupported["dispute_type"] = "not_supported"
     response = client.post(
         "/api/v1/cases",
         json=unsupported,
@@ -187,9 +185,7 @@ def test_evidence_registration_replay_locking_listing_and_timeline(
     assert replay.json()["evidence"]["evidence_id"] == created.json()["evidence"]["evidence_id"]
 
     stale_headers = {"Idempotency-Key": "idem-evidence-stale", "If-Match": "1"}
-    stale = client.post(
-        f"/api/v1/cases/{case_id}/evidence", json=evidence, headers=stale_headers
-    )
+    stale = client.post(f"/api/v1/cases/{case_id}/evidence", json=evidence, headers=stale_headers)
     assert stale.status_code == 409
     assert stale.json()["error_code"] == "OPTIMISTIC_LOCK_CONFLICT"
 
@@ -205,10 +201,13 @@ def test_evidence_registration_replay_locking_listing_and_timeline(
     assert timeline.json()["items"][1]["actor"] == "case-service"
     assert timeline.json()["items"][1]["audit_event_id"]
     assert detail.json()["state_version"] == 2
-    assert sum(
-        event["event_type"] == "EVIDENCE_METADATA_REGISTERED"
-        for event in detail.json()["audit_events"]
-    ) == 1
+    assert (
+        sum(
+            event["event_type"] == "EVIDENCE_METADATA_REGISTERED"
+            for event in detail.json()["audit_events"]
+        )
+        == 1
+    )
 
 
 def test_evidence_validation_unknown_case_and_not_found_contract(

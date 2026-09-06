@@ -289,10 +289,7 @@ class PolicyRetrievalService:
                 )
                 else 0.0,
                 "stale_policy_exclusion": 1.0
-                if all(
-                    "STALE" not in item.citation.document_id
-                    for item in retrieval.results
-                )
+                if all("STALE" not in item.citation.document_id for item in retrieval.results)
                 else 0.0,
             }
             failures = [

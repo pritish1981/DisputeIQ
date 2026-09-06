@@ -23,6 +23,8 @@ from app.adapters.repositories import (
 from app.domain.schemas import (
     CaseResponse,
     CaseStatus,
+    ClassificationDecision,
+    ClassificationInput,
     PolicyRetrievalAbstentionReason,
     PolicyRetrievalConfig,
     PolicyRetrievalRequest,
@@ -39,6 +41,7 @@ from app.domain.schemas import (
     validate_workflow_state_payload,
 )
 from app.services.case_service import CaseNotFoundError, CaseService, fingerprint_request
+from app.services.classification import ClassificationService
 from app.services.policy_retrieval import PolicyRetrievalService
 from app.services.workflow_graph import GRAPH_VERSION, WorkflowState, build_workflow_graph
 
@@ -74,6 +77,7 @@ class WorkflowService:
         db: Session,
         *,
         case_service: CaseService | None = None,
+        classification_service: ClassificationService | None = None,
         policy_retrieval_service: PolicyRetrievalService | None = None,
         audit_repository: AuditRepository | None = None,
     ) -> None:
@@ -82,6 +86,7 @@ class WorkflowService:
         self.workflow_repository = WorkflowRepository(db)
         self.idempotency_repository = IdempotencyRepository(db)
         self.case_service = case_service or CaseService(db)
+        self.classification_service = classification_service or ClassificationService()
         self.policy_retrieval_service = policy_retrieval_service or PolicyRetrievalService(
             db, auto_commit=False
         )
@@ -195,6 +200,9 @@ class WorkflowService:
                         "checkpoint_seq": checkpoint.checkpoint_seq,
                         "interrupt_reason": interrupt_reason,
                         "side_effect_keys": checkpoint.side_effect_keys,
+                        "classification": final_state.get("stage_summaries", {}).get(
+                            "classification"
+                        ),
                     },
                     now=utc_now(),
                 )
@@ -251,17 +259,20 @@ class WorkflowService:
                 if latest is None:
                     raise WorkflowConflictError("Workflow has no durable checkpoint to resume")
                 case = self.case_service.get_case(run.case_id)
-                state = self._initial_state(
-                    case=case,
-                    workflow_id=run.workflow_id,
-                    graph_version=run.graph_version,
-                    state_version=run.state_version,
-                    correlation_id=correlation_id,
-                    resume_payload=request.resume_payload
-                    | {"resume_reason": request.resume_reason, "actor_ref": request.actor_ref},
+                state = cast(WorkflowState, dict(latest.state_json))
+                state.update(
+                    {
+                        "case": case.model_dump(mode="json"),
+                        "state_version": run.state_version,
+                        "correlation_id": correlation_id,
+                        "resume_payload": request.resume_payload
+                        | {
+                            "resume_reason": request.resume_reason,
+                            "actor_ref": request.actor_ref,
+                        },
+                    }
                 )
-                prior_effects = latest.side_effect_keys
-                state["side_effect_keys"] = list(prior_effects)
+                state["side_effect_keys"] = list(latest.side_effect_keys)
                 final_state = self._execute(state)
                 final_state["state_version"] = run.state_version
                 status = str(final_state.get("status", "RUNNING"))
@@ -297,6 +308,9 @@ class WorkflowService:
                         "current_node": current_node,
                         "checkpoint_seq": checkpoint.checkpoint_seq,
                         "interrupt_reason": interrupt_reason,
+                        "classification": final_state.get("stage_summaries", {}).get(
+                            "classification"
+                        ),
                     },
                     now=now,
                 )
@@ -337,9 +351,31 @@ class WorkflowService:
         )
 
     def _execute(self, state: WorkflowState) -> WorkflowState:
-        graph = build_workflow_graph(retrieve_policy=self._retrieve_policy)
+        graph = build_workflow_graph(
+            classify_dispute=self._classify_dispute,
+            retrieve_policy=self._retrieve_policy,
+        )
         result = graph.invoke(state)
         return cast(WorkflowState, result)
+
+    def _classify_dispute(self, state: WorkflowState) -> ClassificationDecision:
+        case = state["case"]
+        evidence_items = case.get("evidence_metadata", [])
+        evidence_count = len(evidence_items) if isinstance(evidence_items, list) else 0
+        return self.classification_service.classify(
+            ClassificationInput.model_validate(
+                {
+                    "case_id": UUID(str(state["case_id"])),
+                    "workflow_id": UUID(str(state["workflow_id"])),
+                    "description": str(case["description"]),
+                    "dispute_type_hint": case.get("dispute_type"),
+                    "channel": case.get("channel"),
+                    "transaction_ref": str(case["transaction_ref"]),
+                    "evidence_count": evidence_count,
+                    "correlation_id": str(state["correlation_id"]),
+                }
+            )
+        )
 
     def _retrieve_policy(self, state: WorkflowState) -> PolicyRetrievalResponse:
         if self.policy_retrieval_service.repository.active_corpus() is None:

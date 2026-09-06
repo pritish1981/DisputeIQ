@@ -124,9 +124,7 @@ def test_promotion_denial_preserves_active_corpus(db_session: Session) -> None:
     with pytest.raises(PolicyValidationError):
         service.ingest(failed_request, correlation_id="corr-failed")
     failed_run = db_session.scalar(
-        select(PolicyIngestionRunModel).where(
-            PolicyIngestionRunModel.status == "failed_validation"
-        )
+        select(PolicyIngestionRunModel).where(PolicyIngestionRunModel.status == "failed_validation")
     )
     assert failed_run is not None
     blocked = service.promote(

@@ -1,9 +1,4 @@
-# Classification and Routing
-
-## Purpose
-Define bounded AI classification and confidence-based routing.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Supported dispute classification
 FRD reference: FR-CLS-001, FR-CLS-004, FR-AIP-001
@@ -52,6 +47,8 @@ The platform SHALL pause automated progression and emit a manual-classification 
 - **WHEN** routing evaluates the classification result
 - **THEN** the configured threshold controls continuation
 - **AND** prompt text or provider output cannot lower the configured gate
+
+## ADDED Requirements
 
 ### Requirement: Unsupported and malformed classification handling
 FRD reference: FR-CLS-003, FR-CLS-004, FR-AIP-004

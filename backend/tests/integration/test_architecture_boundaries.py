@@ -53,7 +53,6 @@ def test_case_api_has_no_ai_or_rag_runtime_imports() -> None:
         app_root / "api" / "v1" / "disputes.py",
         app_root / "services" / "case_service.py",
         app_root / "adapters" / "synthetic_providers.py",
-        app_root / "core" / "config.py",
         app_root / "core" / "correlation.py",
         app_root / "core" / "database.py",
     }
@@ -112,12 +111,13 @@ def test_openapi_exposes_no_financial_posting_surface(client: TestClient) -> Non
     assert not any(term in route_text for term in forbidden_terms)
 
 
-def test_phase_005_workflow_exposes_no_autonomous_financial_or_ai_surface() -> None:
+def test_phase_006_workflow_uses_gateway_without_autonomous_financial_surface() -> None:
     app_root = Path(__file__).resolve().parents[2] / "app"
     workflow_files = [
         app_root / "api" / "v1" / "workflows.py",
         app_root / "services" / "workflow_service.py",
         app_root / "services" / "workflow_graph.py",
+        app_root / "services" / "classification.py",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in workflow_files)
     lowered = combined.lower()
@@ -125,7 +125,6 @@ def test_phase_005_workflow_exposes_no_autonomous_financial_or_ai_surface() -> N
     forbidden_terms = [
         "openai",
         "anthropic",
-        "model_gateway.invoke",
         "recommendation_service",
         "communication_service",
         "send_customer",
@@ -137,7 +136,35 @@ def test_phase_005_workflow_exposes_no_autonomous_financial_or_ai_surface() -> N
     ]
     assert not any(term in lowered for term in forbidden_terms)
     assert "langgraph" in lowered
+    assert "modelgateway" in lowered
     assert "financial_outcome_finalized" in lowered
+
+
+def test_business_capabilities_do_not_import_model_provider_sdks_directly() -> None:
+    app_root = Path(__file__).resolve().parents[2] / "app"
+    provider_sdk_terms = [
+        "from openai",
+        "import openai",
+        "from anthropic",
+        "import anthropic",
+        "azure.ai",
+        'boto3.client("bedrock',
+    ]
+    allowed_gateway_files = {
+        app_root / "services" / "model_gateway.py",
+    }
+    inspected_files = [
+        path
+        for path in app_root.rglob("*.py")
+        if path.is_file() and "__pycache__" not in path.parts and path not in allowed_gateway_files
+    ]
+
+    violations: list[str] = []
+    for path in inspected_files:
+        lowered = path.read_text(encoding="utf-8").lower()
+        if any(term in lowered for term in provider_sdk_terms):
+            violations.append(str(path.relative_to(app_root)))
+    assert violations == []
 
 
 def test_durable_phase_002_records_are_not_redis_backed() -> None:

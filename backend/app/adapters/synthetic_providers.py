@@ -176,9 +176,7 @@ class SyntheticBankingProvider:
         try:
             payload = records[source_ref]
         except KeyError as exc:
-            raise SyntheticProviderError(
-                f"Unknown synthetic {record_type}: {source_ref}"
-            ) from exc
+            raise SyntheticProviderError(f"Unknown synthetic {record_type}: {source_ref}") from exc
         return self._result(provider_name, record_type, source_ref, payload)
 
     def _result(

@@ -254,9 +254,7 @@ class ProviderContextRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def add_results(
-        self, case_id: str, correlation_id: str, results: list[ProviderRecord]
-    ) -> None:
+    def add_results(self, case_id: str, correlation_id: str, results: list[ProviderRecord]) -> None:
         for result in results:
             self.db.add(
                 ProviderContextModel(
@@ -796,7 +794,11 @@ class PolicyRepository:
         stmt = (
             select(PolicyIngestionRunModel)
             .where(PolicyIngestionRunModel.run_id == run_id)
-            .options(selectinload(PolicyIngestionRunModel.documents).selectinload(PolicyDocumentModel.chunks))
+            .options(
+                selectinload(PolicyIngestionRunModel.documents).selectinload(
+                    PolicyDocumentModel.chunks
+                )
+            )
         )
         return self.db.scalar(stmt)
 

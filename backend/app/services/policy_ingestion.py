@@ -332,9 +332,7 @@ class PolicyIngestionService:
         self.db.commit()
         return self.get_run(run.run_id)
 
-    def _validate_documents(
-        self, documents: list[PolicyDocumentIn]
-    ) -> list[dict[str, object]]:
+    def _validate_documents(self, documents: list[PolicyDocumentIn]) -> list[dict[str, object]]:
         errors: list[dict[str, object]] = []
         for index, document in enumerate(documents):
             prefix = f"documents[{index}]"
@@ -391,8 +389,7 @@ class PolicyIngestionService:
             )
             chunk_hash = hashlib.sha256(identity.encode("utf-8")).hexdigest()
             chunk_id = (
-                f"{document.document_id}:{document.version}:"
-                f"{section.section}:{chunk_hash[:12]}"
+                f"{document.document_id}:{document.version}:{section.section}:{chunk_hash[:12]}"
             )
             chunks.append((section.section, content, chunk_id, chunk_hash))
         return chunks

@@ -35,6 +35,31 @@ class DisputeType(StrEnum):
     atm_debit_without_cash = "atm_debit_without_cash"
 
 
+class ClassificationCategory(StrEnum):
+    duplicate_card_transaction = "duplicate_card_transaction"
+    failed_upi_transfer = "failed_upi_transfer"
+    atm_debit_without_cash = "atm_debit_without_cash"
+    unsupported = "unsupported"
+
+
+class ModelGatewayStatus(StrEnum):
+    accepted = "accepted"
+    bypassed = "bypassed"
+    failed = "failed"
+
+
+class ModelGatewayFailureReason(StrEnum):
+    ai_kill_switch = "ai_kill_switch"
+    missing_configuration = "missing_configuration"
+    token_budget_exceeded = "token_budget_exceeded"
+    data_policy_violation = "data_policy_violation"
+    provider_timeout = "provider_timeout"
+    provider_error = "provider_error"
+    schema_validation_failed = "schema_validation_failed"
+    unsupported_category = "unsupported_category"
+    low_confidence = "low_confidence"
+
+
 class Channel(StrEnum):
     web = "web"
     mobile = "mobile"
@@ -90,13 +115,6 @@ class CreateCaseRequest(BaseModel):
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
-
-    @field_validator("dispute_type")
-    @classmethod
-    def require_phase_002_dispute_type(cls, value: DisputeType) -> DisputeType:
-        if value is not DisputeType.duplicate_card_transaction:
-            raise ValueError("Phase 002 supports duplicate_card_transaction only")
-        return value
 
 
 CreateDisputeRequest = CreateCaseRequest
@@ -543,6 +561,119 @@ class PolicyRetrievalEvaluationResponse(BaseModel):
     correlation_id: str
 
 
+class PromptReference(BaseModel):
+    prompt_id: str = Field(default="classification-router", min_length=1, max_length=80)
+    prompt_version: str = Field(default="classification-router-v1", min_length=1, max_length=80)
+    template_hash: str = Field(default="classification-template-v1", min_length=1, max_length=120)
+
+
+class ModelRouteConfig(BaseModel):
+    route_version: str = Field(default="model-route-classification-v1", min_length=1, max_length=80)
+    primary_provider: str = Field(default="deterministic-local", min_length=1, max_length=80)
+    fallback_provider: str | None = Field(default="deterministic-fallback", max_length=80)
+    model_ref: str = Field(default="local-classifier-v1", min_length=1, max_length=120)
+    token_budget: int = Field(default=1200, ge=1, le=20000)
+    timeout_ms: int = Field(default=2000, ge=1, le=60000)
+    retry_limit: int = Field(default=1, ge=0, le=5)
+    enabled: bool = True
+
+
+class ModelGatewayRequest(BaseModel):
+    capability: str = Field(min_length=1, max_length=80)
+    case_id: UUID | None = None
+    workflow_id: UUID | None = None
+    correlation_id: str = Field(min_length=1, max_length=100)
+    prompt: PromptReference = Field(default_factory=PromptReference)
+    route: ModelRouteConfig = Field(default_factory=ModelRouteConfig)
+    response_schema_version: str = Field(
+        default="classification-output-v1", min_length=1, max_length=80
+    )
+    input_text: str = Field(min_length=1, max_length=8000)
+    untrusted_inputs: dict[str, object] = Field(default_factory=dict)
+
+
+class ModelGatewayProviderResult(BaseModel):
+    provider_ref: str = Field(min_length=1, max_length=80)
+    status: str = Field(min_length=1, max_length=40)
+    output_json: dict[str, object] = Field(default_factory=dict)
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    latency_ms: int = Field(default=0, ge=0)
+    error_code: str | None = None
+
+
+class ModelGatewayTelemetry(BaseModel):
+    capability: str
+    case_id: UUID | None
+    workflow_id: UUID | None
+    correlation_id: str
+    provider_route_ref: str
+    prompt_version: str
+    schema_version: str
+    latency_ms: int
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    attempt_count: int
+    fallback_used: bool
+    kill_switch_enabled: bool
+    status: ModelGatewayStatus
+    failure_reason: ModelGatewayFailureReason | None = None
+
+
+class ModelGatewayResponse(BaseModel):
+    status: ModelGatewayStatus
+    validated_output: dict[str, object] = Field(default_factory=dict)
+    failure_reason: ModelGatewayFailureReason | None = None
+    provider_ref: str | None = None
+    fallback_used: bool = False
+    attempt_count: int = 0
+    route_version: str
+    prompt_version: str
+    schema_version: str
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    telemetry: ModelGatewayTelemetry
+
+
+class ClassificationAttributes(BaseModel):
+    transaction_ref: str | None = None
+    dispute_channel: str | None = None
+    evidence_signal: str | None = None
+    customer_signal: str | None = None
+
+
+class ClassificationOutput(BaseModel):
+    category: ClassificationCategory
+    confidence: float = Field(ge=0.0, le=1.0)
+    supporting_attributes: ClassificationAttributes = Field(
+        default_factory=ClassificationAttributes
+    )
+    schema_version: str = Field(default="classification-output-v1", min_length=1, max_length=80)
+    prompt_version: str = Field(default="classification-router-v1", min_length=1, max_length=80)
+    model_route_version: str = Field(
+        default="model-route-classification-v1", min_length=1, max_length=80
+    )
+    correlation_id: str = Field(min_length=1, max_length=100)
+
+
+class ClassificationInput(BaseModel):
+    case_id: UUID | None = None
+    workflow_id: UUID | None = None
+    description: str = Field(min_length=1, max_length=4000)
+    dispute_type_hint: DisputeType | None = None
+    channel: Channel | None = None
+    transaction_ref: str | None = Field(default=None, max_length=80)
+    evidence_count: int = Field(default=0, ge=0)
+    correlation_id: str = Field(min_length=1, max_length=100)
+
+
+class ClassificationDecision(BaseModel):
+    accepted: bool
+    output: ClassificationOutput | None = None
+    manual_classification_required: bool = False
+    reason: ModelGatewayFailureReason | None = None
+    threshold: float
+    telemetry: ModelGatewayTelemetry
+    evaluation_metadata: dict[str, object] = Field(default_factory=dict)
+
+
 class WorkflowStatus(StrEnum):
     running = "RUNNING"
     waiting_evidence = "WAITING_EVIDENCE"
@@ -628,6 +759,9 @@ class WorkflowResponse(BaseModel):
 def validate_workflow_state_payload(state: dict[str, object]) -> dict[str, object]:
     forbidden_keys = {
         "provider_payloads",
+        "raw_provider_payload",
+        "raw_provider_payloads",
+        "hidden_reasoning",
         "evidence_binary",
         "evidence_binaries",
         "secret",
@@ -637,7 +771,18 @@ def validate_workflow_state_payload(state: dict[str, object]) -> dict[str, objec
     }
     if len(str(state)) > 20000:
         raise ValueError("workflow state payload is too large")
-    lowered = {str(key).lower() for key in state}
+    lowered: set[str] = set()
+
+    def collect_keys(value: object) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                lowered.add(str(key).lower())
+                collect_keys(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect_keys(nested)
+
+    collect_keys(state)
     blocked = lowered & forbidden_keys
     if blocked:
         blocked_fields = ", ".join(sorted(blocked))

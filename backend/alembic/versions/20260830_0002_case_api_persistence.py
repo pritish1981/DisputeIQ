@@ -58,9 +58,7 @@ def upgrade() -> None:
 
     op.add_column(
         "timeline_entries",
-        sa.Column(
-            "actor", sa.String(length=100), nullable=False, server_default="case-service"
-        ),
+        sa.Column("actor", sa.String(length=100), nullable=False, server_default="case-service"),
     )
     op.add_column(
         "timeline_entries",
@@ -69,24 +67,18 @@ def upgrade() -> None:
 
     op.add_column(
         "evidence_metadata",
-        sa.Column(
-            "evidence_type", sa.String(length=80), nullable=False, server_default="other"
-        ),
+        sa.Column("evidence_type", sa.String(length=80), nullable=False, server_default="other"),
     )
     op.add_column(
         "evidence_metadata", sa.Column("object_ref", sa.String(length=500), nullable=True)
     )
     op.add_column(
         "evidence_metadata",
-        sa.Column(
-            "source", sa.String(length=80), nullable=False, server_default="customer_upload"
-        ),
+        sa.Column("source", sa.String(length=80), nullable=False, server_default="customer_upload"),
     )
     op.add_column(
         "evidence_metadata",
-        sa.Column(
-            "status", sa.String(length=40), nullable=False, server_default="registered"
-        ),
+        sa.Column("status", sa.String(length=40), nullable=False, server_default="registered"),
     )
     op.add_column(
         "evidence_metadata",
@@ -125,9 +117,7 @@ def downgrade() -> None:
         "evidence_metadata",
         sa.Column("uploaded_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.execute(
-        "UPDATE evidence_metadata SET uploaded_at = registered_at WHERE uploaded_at IS NULL"
-    )
+    op.execute("UPDATE evidence_metadata SET uploaded_at = registered_at WHERE uploaded_at IS NULL")
     op.alter_column("evidence_metadata", "uploaded_at", nullable=False)
     op.drop_column("evidence_metadata", "registered_at")
     op.drop_column("evidence_metadata", "correlation_id")

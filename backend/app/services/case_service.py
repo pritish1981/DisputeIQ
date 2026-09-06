@@ -186,9 +186,7 @@ class CaseService:
         now = utc_now()
         try:
             with self.db.begin_nested():
-                new_version = self.case_repository.increment_version(
-                    case_id, expected_version, now
-                )
+                new_version = self.case_repository.increment_version(case_id, expected_version, now)
                 case.state_version = new_version
                 case.updated_at = now
                 evidence = self.evidence_repository.add(case_id, request, correlation_id, now)

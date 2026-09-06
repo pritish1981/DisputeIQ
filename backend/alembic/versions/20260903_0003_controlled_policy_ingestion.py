@@ -123,8 +123,7 @@ def upgrade() -> None:
     op.create_index("ix_policy_chunks_section", "policy_chunks", ["section"])
     op.create_index("ix_policy_chunks_ingestion_run", "policy_chunks", ["ingestion_run_id"])
     op.execute(
-        "CREATE INDEX ix_policy_chunks_search_tsvector "
-        "ON policy_chunks USING GIN (search_tsvector)"
+        "CREATE INDEX ix_policy_chunks_search_tsvector ON policy_chunks USING GIN (search_tsvector)"
     )
     op.execute(
         "CREATE INDEX ix_policy_chunks_embedding_vector "
