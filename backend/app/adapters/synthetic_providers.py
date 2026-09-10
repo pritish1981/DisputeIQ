@@ -16,6 +16,7 @@ class ProviderRecord:
     response_hash: str
     source_version: str
     retrieved_at: datetime
+    source_as_of: datetime | None = None
 
     @property
     def payload(self) -> dict[str, object]:
@@ -76,6 +77,17 @@ ACCOUNTS: dict[str, dict[str, object]] = {
 }
 
 TRANSACTIONS: dict[str, dict[str, object]] = {
+    "txn_3002": {
+        "transaction_ref": "txn_3002",
+        "account_ref": "acct_2001",
+        "merchant_ref": "mrc_4001",
+        "settlement_ref": "stl_5002",
+        "refund_ref": "rfd_6002",
+        "amount": "49.99",
+        "currency": "USD",
+        "authorized_at": "2026-08-28T10:17:00Z",
+        "network_status": "settled",
+    },
     "txn_3001": {
         "transaction_ref": "txn_3001",
         "account_ref": "acct_2001",
@@ -87,7 +99,7 @@ TRANSACTIONS: dict[str, dict[str, object]] = {
         "authorized_at": "2026-08-28T10:15:00Z",
         "network_status": "settled",
         "possible_duplicate_ref": "txn_3002",
-    }
+    },
 }
 
 MERCHANTS: dict[str, dict[str, object]] = {
@@ -100,22 +112,35 @@ MERCHANTS: dict[str, dict[str, object]] = {
 }
 
 SETTLEMENTS: dict[str, dict[str, object]] = {
+    "stl_5002": {
+        "settlement_ref": "stl_5002",
+        "transaction_ref": "txn_3002",
+        "status": "settled",
+        "settled_at": "2026-08-29T02:00:00Z",
+    },
     "stl_5001": {
         "settlement_ref": "stl_5001",
         "transaction_ref": "txn_3001",
         "status": "settled",
         "settled_at": "2026-08-29T02:00:00Z",
-    }
+    },
 }
 
 REFUNDS: dict[str, dict[str, object]] = {
+    "rfd_6002": {
+        "refund_ref": "rfd_6002",
+        "transaction_ref": "txn_3002",
+        "status": "not_refunded",
+        "amount": "0.00",
+        "currency": "USD",
+    },
     "rfd_6001": {
         "refund_ref": "rfd_6001",
         "transaction_ref": "txn_3001",
         "status": "not_refunded",
         "amount": "0.00",
         "currency": "USD",
-    }
+    },
 }
 
 
@@ -125,6 +150,10 @@ class SyntheticProviderError(LookupError):
 
 class SyntheticBankingProvider:
     source_version = "synthetic-phase-002-v1"
+
+    def __init__(self, *, source_as_of: datetime | None = None) -> None:
+        # This adapter is the synthetic source. Re-reading it does not renew snapshot freshness.
+        self.source_as_of = source_as_of or datetime.now(UTC)
 
     def get_customer(self, customer_ref: str) -> ProviderRecord:
         return self._lookup("SyntheticCustomerProvider", "customer", customer_ref, CUSTOMERS)
@@ -195,4 +224,5 @@ class SyntheticBankingProvider:
             response_hash=hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
             source_version=self.source_version,
             retrieved_at=datetime.now(UTC),
+            source_as_of=self.source_as_of,
         )

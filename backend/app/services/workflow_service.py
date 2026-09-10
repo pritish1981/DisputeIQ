@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import cast
@@ -8,6 +9,8 @@ from uuid import UUID
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
+from app.adapters.control_context import ControlContextAdapter
+from app.adapters.control_repository import ControlRepository
 from app.adapters.models import WorkflowCheckpointModel, WorkflowRunModel
 from app.adapters.repositories import (
     AuditRepository,
@@ -20,6 +23,7 @@ from app.adapters.repositories import (
     WorkflowRunNotFoundError,
     utc_now,
 )
+from app.domain.controls import CONTROL_GRAPH_VERSION
 from app.domain.schemas import (
     CaseResponse,
     CaseStatus,
@@ -80,6 +84,7 @@ class WorkflowService:
         classification_service: ClassificationService | None = None,
         policy_retrieval_service: PolicyRetrievalService | None = None,
         audit_repository: AuditRepository | None = None,
+        control_context: ControlContextAdapter | None = None,
     ) -> None:
         self.db = db
         self.case_repository = CaseRepository(db)
@@ -91,6 +96,7 @@ class WorkflowService:
             db, auto_commit=False
         )
         self.audit_repository = audit_repository or AuditRepository(db)
+        self.control_context = control_context
 
     def start_workflow(
         self,
@@ -106,6 +112,8 @@ class WorkflowService:
             return replay
 
         case = self.case_service.get_case(str(request.case_id))
+        if request.graph_version not in {GRAPH_VERSION, CONTROL_GRAPH_VERSION}:
+            raise WorkflowConflictError("Unknown graph version")
         if case.status is not CaseStatus.submitted:
             raise WorkflowConflictError("Only submitted cases can start Phase 005 workflow")
 
@@ -140,6 +148,7 @@ class WorkflowService:
                     state_version=run.state_version,
                     correlation_id=correlation_id,
                 )
+                initial_state["resume_payload"] = {"actor_ref": request.actor_ref}
                 self.workflow_repository.append_checkpoint(
                     run=run,
                     state=dict(initial_state),
@@ -255,11 +264,30 @@ class WorkflowService:
                 run = self.workflow_repository.compare_state_version(
                     str(workflow_id), expected_version
                 )
+                if run.graph_version not in {GRAPH_VERSION, CONTROL_GRAPH_VERSION}:
+                    raise WorkflowConflictError("Unknown graph version")
                 latest = self.workflow_repository.latest_checkpoint(run.workflow_id)
                 if latest is None:
                     raise WorkflowConflictError("Workflow has no durable checkpoint to resume")
                 case = self.case_service.get_case(run.case_id)
-                state = cast(WorkflowState, dict(latest.state_json))
+                state = cast(WorkflowState, deepcopy(latest.state_json))
+                if run.graph_version == CONTROL_GRAPH_VERSION:
+                    if request.resume_payload:
+                        raise WorkflowConflictError("Phase 007 accepts typed re-evaluation only")
+                    if not request.reevaluation and state.get("control_evaluation_id"):
+                        raise WorkflowConflictError("Explicit linked re-evaluation required")
+                    if (
+                        request.reevaluation
+                        and request.reevaluation.prior_evaluation_id
+                        != state.get("control_evaluation_id")
+                    ):
+                        raise WorkflowConflictError(
+                            "Re-evaluation must reference latest evaluation"
+                        )
+                    if request.reevaluation:
+                        ControlRepository(self.db).get(
+                            run.workflow_id, request.reevaluation.prior_evaluation_id
+                        )
                 state.update(
                     {
                         "case": case.model_dump(mode="json"),
@@ -269,12 +297,18 @@ class WorkflowService:
                         | {
                             "resume_reason": request.resume_reason,
                             "actor_ref": request.actor_ref,
+                            **(
+                                {"reevaluation": request.reevaluation.model_dump(mode="json")}
+                                if request.reevaluation
+                                else {}
+                            ),
                         },
                     }
                 )
                 state["side_effect_keys"] = list(latest.side_effect_keys)
                 final_state = self._execute(state)
                 final_state["state_version"] = run.state_version
+                self._validate_state(dict(final_state))
                 status = str(final_state.get("status", "RUNNING"))
                 current_node = str(final_state.get("current_node", latest.current_node))
                 interrupt = final_state.get("interrupt", {})
@@ -351,11 +385,30 @@ class WorkflowService:
         )
 
     def _execute(self, state: WorkflowState) -> WorkflowState:
+        from app.services.control_workflow import ControlWorkflow
+
+        nodes = None
+        if state["graph_version"] == CONTROL_GRAPH_VERSION:
+            state["status"] = "RUNNING"
+            state["interrupt"] = {"required": False}
+            state["stage_summaries"] = {
+                key: value
+                for key, value in state.get("stage_summaries", {}).items()
+                if key == "classification"
+            }
+            state["node_telemetry"] = []
+            nodes = ControlWorkflow(
+                self.db, self.policy_retrieval_service, self.audit_repository, self.control_context
+            ).nodes()
         graph = build_workflow_graph(
             classify_dispute=self._classify_dispute,
             retrieve_policy=self._retrieve_policy,
+            control_nodes=nodes,
         )
         result = graph.invoke(state)
+        if nodes:
+            result.pop("case", None)
+            result.pop("resume_payload", None)
         return cast(WorkflowState, result)
 
     def _classify_dispute(self, state: WorkflowState) -> ClassificationDecision:

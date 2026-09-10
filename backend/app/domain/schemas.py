@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
+from app.domain.controls import ReevaluationRequest
+
 
 class CaseStatus(StrEnum):
     draft = "Draft"
@@ -532,6 +534,7 @@ class PolicyRetrievalTelemetryOut(BaseModel):
 
 
 class PolicyRetrievalResponse(BaseModel):
+    eligibility: dict[str, object] = Field(default_factory=dict)
     status: str
     approved_context: bool
     requires_policy_review: bool
@@ -675,6 +678,8 @@ class ClassificationDecision(BaseModel):
 
 
 class WorkflowStatus(StrEnum):
+    waiting_rule_review = "WAITING_RULE_REVIEW"
+    waiting_supervisor_review = "WAITING_SUPERVISOR_REVIEW"
     running = "RUNNING"
     waiting_evidence = "WAITING_EVIDENCE"
     waiting_policy_review = "WAITING_POLICY_REVIEW"
@@ -699,6 +704,8 @@ class WorkflowStartRequest(BaseModel):
 
 
 class WorkflowResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reevaluation: ReevaluationRequest | None = None
     actor_ref: str = Field(default="workflow-service", min_length=1, max_length=100)
     resume_reason: str = Field(default="authorized_resume", min_length=1, max_length=120)
     resume_payload: dict[str, object] = Field(default_factory=dict)

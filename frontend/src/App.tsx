@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { ControlViewer } from "./ControlViewer";
 
 import { CreateDisputeInput, DisputeCase, createDispute, getDispute } from "./api";
 import "./styles.css";
@@ -170,6 +171,7 @@ export default function App() {
 
         {currentCase && <CaseDetail disputeCase={currentCase} />}
       </section>
+      <ControlViewer />
     </main>
   );
 }

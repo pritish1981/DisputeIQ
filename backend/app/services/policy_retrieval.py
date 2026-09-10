@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from app.adapters.repositories import (
     PolicyRetrievalRow,
     utc_now,
 )
+from app.domain.controls import EligibilityProfile
 from app.domain.schemas import (
     PolicyCitationOut,
     PolicyEvaluationOut,
@@ -28,6 +30,7 @@ from app.domain.schemas import (
     PolicyRetrievedChunkOut,
     PolicyReviewSignalOut,
 )
+from app.services.policy_eligibility import PolicyEligibilityService
 from app.services.policy_ingestion import DeterministicEmbeddingAdapter, PolicyAuthorizationError
 
 
@@ -63,6 +66,7 @@ class PolicyRetrievalService:
         request: PolicyRetrievalRequest,
         *,
         correlation_id: str,
+        eligibility_profile: EligibilityProfile | None = None,
     ) -> PolicyRetrievalResponse:
         self._validate_actor(request.actor_ref)
         started = perf_counter()
@@ -81,13 +85,10 @@ class PolicyRetrievalService:
                 index_version=None,
             )
 
-        eligible = self.repository.eligible_chunks(
-            corpus=active,
-            effective_date=request.effective_date,
-            product=request.product,
-            channel=request.channel,
-            jurisdiction=request.jurisdiction,
+        eligibility = PolicyEligibilityService().evaluate(
+            self.repository, active, request, eligibility_profile
         )
+        eligible = eligibility["eligible_chunk_ids"]
         if not eligible:
             return self._abstain(
                 request=request,
@@ -99,6 +100,7 @@ class PolicyRetrievalService:
                 result_count=0,
                 corpus_version=active.corpus_version,
                 index_version=active.index_version,
+                eligibility=eligibility,
             )
 
         query_embedding = self._format_vector(self.embedding_adapter.embed(request.query))
@@ -111,6 +113,7 @@ class PolicyRetrievalService:
             channel=request.channel,
             jurisdiction=request.jurisdiction,
             limit=request.retrieval_config.top_k,
+            eligible_chunk_ids=eligible,
         )
         ranked = self._rank(rows, request.retrieval_config)
         if not ranked:
@@ -124,6 +127,7 @@ class PolicyRetrievalService:
                 result_count=0,
                 corpus_version=active.corpus_version,
                 index_version=active.index_version,
+                eligibility=eligibility,
             )
 
         citation_reason = self._citation_failure(ranked)
@@ -138,6 +142,7 @@ class PolicyRetrievalService:
                 result_count=len(ranked),
                 corpus_version=active.corpus_version,
                 index_version=active.index_version,
+                eligibility=eligibility,
             )
 
         top_score = ranked[0].fused_score
@@ -152,6 +157,7 @@ class PolicyRetrievalService:
                 result_count=len(ranked),
                 corpus_version=active.corpus_version,
                 index_version=active.index_version,
+                eligibility=eligibility,
             )
         if self._is_ambiguous(ranked, request.retrieval_config):
             return self._abstain(
@@ -164,6 +170,7 @@ class PolicyRetrievalService:
                 result_count=len(ranked),
                 corpus_version=active.corpus_version,
                 index_version=active.index_version,
+                eligibility=eligibility,
             )
 
         results = [
@@ -210,11 +217,13 @@ class PolicyRetrievalService:
                 "returned_result_count": len(results),
                 "confidence": top_score,
                 "telemetry": telemetry.model_dump(mode="json"),
+                "eligibility": eligibility,
             },
         )
         if self.auto_commit:
             self.db.commit()
         return PolicyRetrievalResponse(
+            eligibility=eligibility,
             status="retrieved",
             approved_context=True,
             requires_policy_review=False,
@@ -346,6 +355,7 @@ class PolicyRetrievalService:
         result_count: int,
         corpus_version: str | None,
         index_version: str | None,
+        eligibility: dict[str, Any] | None = None,
     ) -> PolicyRetrievalResponse:
         telemetry = self._telemetry(
             request=request,
@@ -366,6 +376,7 @@ class PolicyRetrievalService:
             now=now,
             metadata={
                 "abstention_reason": reason.value,
+                "eligibility": eligibility or {},
                 "corpus_version": corpus_version,
                 "index_version": index_version,
                 "retrieval_config_version": request.retrieval_config.version,
@@ -378,6 +389,7 @@ class PolicyRetrievalService:
         if self.auto_commit:
             self.db.commit()
         return PolicyRetrievalResponse(
+            eligibility=eligibility or {},
             status="abstained",
             approved_context=False,
             requires_policy_review=True,

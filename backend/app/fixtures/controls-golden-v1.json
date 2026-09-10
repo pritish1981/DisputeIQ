@@ -1,0 +1,208 @@
+{
+  "dataset_version": "controls-golden-v1",
+  "cases": [
+    {
+      "id": "matched",
+      "changes": {},
+      "candidate": "DUPLICATE_SUPPORTED",
+      "mandatory_complete": true,
+      "score": "0.935000",
+      "ready": true
+    },
+    {
+      "id": "amount_nonmatch",
+      "changes": {
+        "facts.candidate.amount": "50.00"
+      },
+      "candidate": "DUPLICATE_NOT_SUPPORTED",
+      "mandatory_complete": true,
+      "score": "0.935000",
+      "ready": true
+    },
+    {
+      "id": "same_identity",
+      "changes": {
+        "facts.candidate.transaction_ref": "txn-a"
+      },
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": true,
+      "ready": false
+    },
+    {
+      "id": "filing_boundary",
+      "changes": {
+        "facts.submitted_at": "2026-05-01T00:00:00Z"
+      },
+      "candidate": "DUPLICATE_SUPPORTED",
+      "mandatory_complete": true,
+      "score": "0.935000",
+      "ready": true
+    },
+    {
+      "id": "filing_exceeded",
+      "changes": {
+        "facts.submitted_at": "2026-05-01T00:00:01Z"
+      },
+      "candidate": "DUPLICATE_NOT_SUPPORTED",
+      "mandatory_complete": true,
+      "ready": true
+    },
+    {
+      "id": "pair_window_boundary",
+      "changes": {
+        "facts.candidate.authorized_at": "2026-01-01T00:05:00Z"
+      },
+      "candidate": "DUPLICATE_SUPPORTED",
+      "mandatory_complete": true,
+      "ready": true
+    },
+    {
+      "id": "pair_window_exceeded",
+      "changes": {
+        "facts.candidate.authorized_at": "2026-01-01T00:05:01Z"
+      },
+      "candidate": "DUPLICATE_NOT_SUPPORTED",
+      "mandatory_complete": true,
+      "ready": true
+    },
+    {
+      "id": "refunded",
+      "changes": {
+        "facts.candidate_refund.status": "refunded",
+        "facts.candidate_refund.amount": "49.99"
+      },
+      "candidate": "ALREADY_REMEDIATED",
+      "mandatory_complete": true,
+      "ready": true
+    },
+    {
+      "id": "partial_refund",
+      "changes": {
+        "facts.candidate_refund.status": "refunded",
+        "facts.candidate_refund.amount": "10.00"
+      },
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": true,
+      "ready": false
+    },
+    {
+      "id": "pending",
+      "changes": {
+        "facts.candidate_settlement.status": "pending"
+      },
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": true,
+      "ready": false
+    },
+    {
+      "id": "missing_candidate",
+      "changes": {
+        "facts.candidate": {}
+      },
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": true,
+      "ready": false
+    },
+    {
+      "id": "low_confidence",
+      "changes": {
+        "signals.classification": "0",
+        "signals.policy": "0.10"
+      },
+      "candidate": "DUPLICATE_SUPPORTED",
+      "mandatory_complete": true,
+      "score": "0.625000",
+      "ready": false
+    },
+    {
+      "id": "missing_signal",
+      "changes": {
+        "signals.policy": null
+      },
+      "candidate": "DUPLICATE_SUPPORTED",
+      "mandatory_complete": true,
+      "ready": false
+    },
+    {
+      "id": "threshold_equal",
+      "changes": {
+        "signals.classification": "0",
+        "signals.policy": "0.40"
+      },
+      "candidate": "DUPLICATE_SUPPORTED",
+      "mandatory_complete": true,
+      "score": "0.700000",
+      "ready": true
+    },
+    {
+      "id": "missing_document",
+      "changes": {},
+      "remove_evidence": "customer_document",
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": false,
+      "ready": false
+    },
+    {
+      "id": "stale_evidence",
+      "changes": {},
+      "stale": true,
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": false,
+      "ready": false
+    },
+    {
+      "id": "conflicting_evidence",
+      "changes": {},
+      "conflict": true,
+      "candidate": "REVIEW_REQUIRED",
+      "mandatory_complete": false,
+      "ready": false
+    },
+    {
+      "id": "policy_not_admitted",
+      "changes": {},
+      "policy_refs": [],
+      "candidate": "REVIEW_REQUIRED",
+      "ready": false
+    },
+    {
+      "id": "rule_exception",
+      "changes": {},
+      "rule_exception": true,
+      "candidate": "REVIEW_REQUIRED",
+      "ready": false
+    },
+    {
+      "id": "unknown_handler",
+      "invalid_config": {
+        "path": "rules.rules.0.handler",
+        "value": "llm_score"
+      }
+    },
+    {
+      "id": "invalid_threshold",
+      "invalid_config": {
+        "path": "confidence.threshold",
+        "value": "1.01"
+      }
+    },
+    {
+      "id": "nonfinite_weight",
+      "invalid_config": {
+        "path": "confidence.weights.policy",
+        "value": "NaN"
+      }
+    },
+    {
+      "id": "blank_pair_currency",
+      "changes": {
+        "facts.disputed.currency": "",
+        "facts.candidate.currency": "",
+        "facts.disputed_refund.currency": "",
+        "facts.candidate_refund.currency": ""
+      },
+      "candidate": "REVIEW_REQUIRED",
+      "ready": false
+    }
+  ]
+}

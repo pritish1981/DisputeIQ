@@ -1,6 +1,6 @@
 # DisputeIQ
 
-DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 006 adds a governed Model Gateway and AI-assisted classification so submitted disputes can be classified through provider-neutral, schema-validated, auditable model access while authoritative facts, policy controls, human decisions, communications, and financial posting remain outside autonomous workflow authority.
+DisputeIQ is a production-style banking transaction dispute investigation and resolution pilot built with synthetic banking data. Phase 007 adds deterministic evidence completeness, policy applicability, rules and governed confidence on top of the Model Gateway classification baseline. Duplicate-card investigations now reach a pinned, auditable disposition candidate for the next recommendation and human-decision phase.
 
 ## Source of Truth
 
@@ -14,22 +14,174 @@ Use this hierarchy when requirements disagree:
 
 Stop and reconcile a conflict before implementing the lower-level source.
 
-## Current Phase 006 Scope
+## Current Phase 007 — Deterministic Controls, Rules & Confidence
 
-Phase 006 includes the Phase 002 Case API baseline, Phase 003 controlled policy ingestion, Phase 004 controlled hybrid policy retrieval, Phase 005 bounded LangGraph workflow orchestration, and the first Model Gateway-backed classification slice.
+Phase 007 includes the Phase 002 through Phase 006 baseline plus the approved `007-deterministic-rules-confidence` change. Implementation and validation are complete. The user accepted Phase 007, its seven delta specs are synchronized, and the change is archived at `openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence`. FRD v3.1 is authoritative for this change.
+
+
+Implemented capabilities:
+
+| Capability | Phase 007 behavior |
+| --- | --- |
+| Evidence completeness | Versioned required-evidence contracts; availability, missing, stale and conflicting evidence; deterministic completeness score and mandatory gates. |
+| Policy eligibility | Deterministic applicability and admission before retrieval, with policy/corpus lineage and fail-closed rechecks. |
+| Rules Engine | Versioned registry and rule sets for eligibility, timelines, evidence and duplicate transactions; reason codes, exceptions and persisted execution records. |
+| Governed confidence | Measurable classification, completeness, retrieval, rule and conflict signals combined using versioned weights and thresholds. The controls services do not call an LLM. |
+| Reassessment and audit | Immutable evaluations, linked requests, retained version pins, idempotent replay and optimistic concurrency checks. |
+| Inspection | Protected local API history/detail endpoints and a read-only frontend evaluation viewer. |
+
+The exit gate is a deterministic disposition candidate under pinned evidence contract, policy, rule-set and confidence-threshold versions. Material financial outcomes still require the later human-decision lifecycle.
+
+### Phase 007 validation and local runbook
+
+Recorded implementation validation on 2026-09-10 in `D:\git-repo\DisputeIQ`:
+
+- Backend: Ruff and mypy passed; **114 pytest tests passed**.
+- Controls golden evaluation: **23 scenarios passed**, including boundaries, missing/stale/conflicting evidence, missing policy admission, exceptions, low confidence and invalid configuration.
+- PostgreSQL: additive upgrades `20260908_0007` and `20260910_0007b` applied; current head is `20260910_0007b`.
+- Live controls smoke: `DUPLICATE_SUPPORTED`, governed score **0.855404**, threshold **0.70**, `CONTROLLED_STOP / deterministic_disposition_ready`.
+- Live smoke also checks nine SQL admission predicates/boundaries, immutable storage, foreign-key scope, uniqueness, evidence reassessment, competing resumes and idempotent replay in a separate process.
+- Classification evaluation and legacy PostgreSQL policy/workflow smokes passed. Policy smoke retrieval was `0.541734`; its evaluation metrics passed. The legacy graph retains its Phase 006 stop.
+- Frontend lint/typecheck/build passed; **6 tests passed**. Browser inspection confirmed persisted blocked and successful evaluations, evidence checklist, citations, rules, contributions and request lineage.
+- Phase 007 strict OpenSpec validation passed. Repository-wide strict validation: **18 passed, 1 failed**; the failure is the separate `normalize-rfc2119-requirements` change. It does not invalidate the Phase 007 scoped result, but the repository-wide gate is not green.
+
+#### 1. Prepare the database and run the controls smoke
+
+Install the tools listed under [Prerequisites](#prerequisites). Start Docker Desktop first, then run in PowerShell. Continue after `pg_isready` reports `accepting connections`; if it is still starting, retry that check:
+
+```powershell
+Set-Location D:\git-repo\DisputeIQ
+docker compose up -d postgres redis
+docker compose exec postgres pg_isready -U disputeiq -d disputeiq
+Set-Location .\backend
+uv sync
+$env:APP_ENV = 'local'
+$env:DATABASE_URL = 'postgresql+psycopg://disputeiq:disputeiq@127.0.0.1:5433/disputeiq'
+$env:AI_ENABLED = 'true'
+$env:AI_KILL_SWITCH_ENABLED = 'false'
+uv run alembic upgrade head
+uv run alembic current
+uv run python -m app.control_regression
+uv run python -m app.control_fixture_loader
+$smokeJson = uv run python -m app.control_smoke
+if ($LASTEXITCODE -ne 0) { throw 'Controls smoke failed' }
+$smoke = ($smokeJson -join "`n") | ConvertFrom-Json
+$smoke | ConvertTo-Json -Depth 10
+$workflowId = $smoke.workflow_id
+```
+
+Expected results:
+
+- `alembic current`: `20260910_0007b (head)` for both newly created and upgraded databases.
+- Controls regression: all 23 golden scenarios pass.
+- Smoke: `status: passed`, `candidate: DUPLICATE_SUPPORTED`, confidence `0.855404`.
+- Version pins: `duplicate-card-evidence-v1`, `policy-eligibility-v1`, `duplicate-card-rules-v1`, `case-confidence-v1`, plus the recorded policy corpus and citation versions.
+- Storage, scope/uniqueness, evidence reassessment and separate-process replay checks pass. Competing resumes return one `accepted` and one `stale`; their order can vary.
+- SQL admission results cover product, channel, jurisdiction, inactive/unapproved/ineffective policies, unmapped family, index readiness and the inclusive effective-date boundary.
+
+The local provider is deterministic; no real model-provider credentials are required. Environment variables apply only to the PowerShell process where they are set.
+
+The smoke creates synthetic audited cases. It first proves `WAITING_EVIDENCE` for an unvalidated statement, explicitly validates the known synthetic fixture, then races two linked resumes. Exactly one succeeds; the other is stale. It prints fresh `case_id`, `workflow_id` and `evaluation_id` values for API/UI inspection. The fixture loader promotes its approved synthetic policy corpus; running another policy smoke may promote a different corpus, so rerun the controls loader before a new Phase 007 investigation.
+
+The reviewed synthetic parameters are in `backend/app/fixtures/controls-v1.json`: seven mandatory evidence requirements, 24-hour provider snapshot freshness, 120-day filing limit, a 300-second duplicate-pair window, and exact Decimal amount matching. Confidence is `0.15C + 0.30E + 0.25P + 0.30R - 0.20X - 0.20T`, clamped and rounded to six decimals. `C` is classification, `E` completeness, `P` admitted retrieval, `R` determinate rule fraction, `X` conflict and `T` required-provider failure fraction. PASS and FAIL are both determinate. Hard gates cannot be overridden by the score. These values are synthetic pilot configuration, not production banking policy or calibrated production thresholds.
+
+Configuration registration validates typed content and runs the golden suite. Versions and evaluation records are append-only. Register future versions with reviewed effective intervals; overlapping eligible profiles fail closed. Explicit re-evaluation with `retain_pins: false` resolves newly effective versions; the default retains the original configuration and policy pins, rechecking applicability, revocation and integrity before progression.
+
+#### 2. Inspect the persisted results in the UI and API
+
+Start the API from the same backend shell:
+
+```powershell
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+In another PowerShell terminal:
+
+```powershell
+Set-Location D:\git-repo\DisputeIQ\frontend
+npm.cmd ci
+npm.cmd run dev -- --host 127.0.0.1
+```
+
+Open `http://127.0.0.1:5173`. In **Deterministic controls**, paste the smoke's workflow ID and select **Load evaluations**. Compare the initial blocked assessment with its linked successful reassessment. On narrow screens, scroll the rule/factor tables horizontally. Swagger is at `http://127.0.0.1:8001/docs`.
+
+The initial assessment must show an unvalidated statement blocking mandatory completeness; the reassessment must show completeness `1.0`, fulfilled evidence-request lineage and a ready candidate. Inspect the policy citations, six rule results, confidence contributions and pinned versions. A high score alone must never bypass a mandatory gate.
+
+In a third PowerShell terminal, read control history and details:
+
+```powershell
+$workflowId = '<workflow_id printed by control_smoke>'
+$headers = @{ 'X-Control-Reader' = 'true'; 'X-Correlation-ID' = 'manual-controls-review' }
+$history = Invoke-RestMethod "http://127.0.0.1:8001/api/v1/workflows/$workflowId/control-evaluations" -Headers $headers
+$evaluationId = $history.items[-1].evaluation_id
+Invoke-RestMethod "http://127.0.0.1:8001/api/v1/workflows/$workflowId/control-evaluations/$evaluationId" -Headers $headers
+```
+
+To start through Swagger, use `POST /api/v1/workflows` with `graph_version: duplicate-card-controls-v1`, a submitted case ID, an actor reference, a unique `Idempotency-Key`, and `X-Control-Reader: true`. Uploaded metadata alone has unknown validation; only the controlled synthetic fixture validation supplies validated status here. Real file validation/OCR is outside this phase.
+
+#### 3. Verify controlled start and reassessment
+
+For a paused investigation after validated evidence or authoritative inputs change, resume requires the latest workflow `state_version` in `If-Match`, a new idempotency key and this typed body:
+
+```json
+{
+  "actor_ref": "analyst:local-review",
+  "reevaluation": {
+    "prior_evaluation_id": "<latest evaluation ID>",
+    "reason": "New validated evidence or authoritative snapshot",
+    "retain_pins": true
+  }
+}
+```
+
+The smoke already exercises this reassessment path; manual resume is optional. For a paused workflow, use the body above with `POST /api/v1/workflows/{workflow_id}/resume`, `X-Control-Reader: true`, `If-Match: <current workflow state_version>` and a fresh `Idempotency-Key`. Read the current version from `GET /api/v1/workflows/{workflow_id}` immediately beforehand. Keep `retain_pins: true` unless deliberately testing approved newly effective configuration.
+
+In Swagger, verify that a controls read without the reader header returns 403, an unknown evaluation returns 404, and malformed input or extra reevaluation fields return 422. The smoke verifies stale competing resumes and idempotent replay. The persisted detail response should expose control summaries and lineage without raw provider payloads.
+
+A retry uses the same key and identical body to replay its original response. Forged scores, rules or approval flags are rejected. `WAITING_EVIDENCE`, `WAITING_POLICY_REVIEW`, `WAITING_RULE_REVIEW` and `WAITING_SUPERVISOR_REVIEW` are durable stops. Evidence requests can be fulfilled by validated reassessment; no reviewer-approval operation exists in this phase. A ready result authorizes only the recommendation boundary, never money movement.
+
+Access limitation: `X-Control-Reader: true` follows the existing pilot header convention and is allowed only in `APP_ENV=local/test`; it is not authenticated production RBAC. Control start/resume/read routes fail closed outside those environments. The frontend is a local read-only viewer. Production identity, real banking providers, threshold calibration and the Phase 008 recommendation/HITL lifecycle are not claimed complete.
+
+#### 4. Run automated checks and inspect OpenSpec evidence
+
+In a backend shell with the database environment configured as in step 1, repeat the checks:
+
+```powershell
+Set-Location D:\git-repo\DisputeIQ\backend
+uv run ruff check .
+uv run mypy app tests
+uv run pytest
+uv run python -m app.classification_eval
+uv run python -m app.policy_retrieval_smoke
+uv run python -m app.workflow_smoke
+uv run python -m app.control_smoke
+Set-Location ..\frontend
+npm.cmd run lint
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build
+Set-Location ..
+npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict
+npx.cmd -y @fission-ai/openspec@1.10.0 validate --all --strict
+```
+
+The archived [Phase 007 task checklist](openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence/tasks.md) contains 32 completed tasks. See the [validation record](openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence/validation.md) for the implementation acceptance evidence. Main-spec validation expects `18 passed, 0 failed`; repository-wide validation currently has the unrelated normalization failure described above. Phase 007 is archived, so it is no longer an active change to apply.
+
+For rollback, disable new Phase 007 starts and retain audited records. Destructive downgrade refuses a populated control store. Existing `duplicate-card-workflow-v1` checkpoints keep their original behavior; new rules run only under the explicit controls graph version.
 
 ## Recent Changes
 
-Latest archived change: `openspec/changes/archive/2026-09-06-006-model-gateway-classification`.
+Latest archived change: `openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence`.
 
 Recent capability additions:
 
+- Phase 007 adds deterministic evidence completeness, policy eligibility, versioned rules and governed confidence, immutable reassessment history and a read-only controls viewer. The `duplicate-card-controls-v1` graph reaches a disposition candidate under pinned versions.
 - Phase 004 added controlled hybrid policy retrieval over approved active corpora, combining deterministic applicability filters, PostgreSQL FTS, pgvector similarity, fused scoring, confidence/ambiguity thresholds, citations, audit, and retrieval evaluation.
 - Phase 005 added bounded LangGraph orchestration for submitted duplicate-card cases with durable PostgreSQL workflow runs/checkpoints, compact state, idempotent start/resume APIs, optimistic workflow state-version checks, audit-visible workflow events, and telemetry.
 - Phase 006 adds a central Model Gateway, deterministic local provider adapter, versioned classification schema, prompt/schema/route lineage, token/data-policy checks, fallback metadata, kill-switch bypass, and classification for duplicate-card, failed-UPI, and ATM debit-without-cash disputes.
 - Phase 006 intentionally stops before recommendation generation, durable HITL assignment, customer communication, finalization, and financial posting.
 
-Latest local validation snapshot:
+Historical Phase 006 validation snapshot:
 
 - Backend quality checks passed: `uv run ruff check .`, `uv run mypy app tests`, and `uv run pytest` with `76 passed`.
 - Live PostgreSQL migration reached `20260905_0005 (head)`.
@@ -91,7 +243,7 @@ Model Gateway and classification support:
 - correlated classification telemetry and audit-visible workflow lineage
 - deterministic classification evaluation through `uv run python -m app.classification_eval`
 
-This change does not generate recommendations, persist durable HITL tasks, send communications, call model providers directly from business/workflow code, or expose refund, credit, debit, chargeback, or financial-posting operations.
+Phase 007 persists minimal evidence, policy, manual and supervisor review requests. Full reviewer assignment/approval, grounded recommendation generation, communication and financial posting remain later-phase work. Control services do not call an LLM.
 
 ## Prerequisites
 
@@ -148,13 +300,13 @@ docker compose exec -T postgres psql `
   -c "SELECT version_num FROM alembic_version;"
 ```
 
-The Phase 005 head revision is `20260905_0005`.
+The current Phase 007 head revision is `20260910_0007b`. Phase 007 adds versioned control configuration, evaluation/execution records, review requests and database integrity protections.
 
 Phase 005 adds workflow run and checkpoint tables over the Phase 004 runtime. The
 live retrieval path still depends on the Phase 003 pgvector
 `policy_chunks.embedding_vector` column and generated `search_tsvector` column.
 
-If `alembic_version` does not exist, try the normal online migration from `backend/`:
+For both new databases and existing databases at an earlier revision, apply the normal online migration from `backend/`:
 
 ```powershell
 Set-Location backend
@@ -165,7 +317,7 @@ Remove-Item Env:DATABASE_URL
 Set-Location ..
 ```
 
-If host TCP authentication remains unavailable but the container login succeeds, apply the migration once through the container:
+Only for a new database without `alembic_version`, if host TCP authentication remains unavailable but the container login succeeds, apply the migration once through the container:
 
 ```powershell
 Set-Location backend
@@ -694,7 +846,7 @@ Its approved deltas are synced into the long-lived specs under `openspec/specs/`
 | 6. Audit/security/observability | Policy API tests, audit service tests, architecture-boundary tests |
 | 7. Evaluation/docs/final validation | Backend checks, policy smoke, OpenSpec strict validation |
 
-Latest validation snapshot:
+Historical validation snapshot:
 
 - `uv run ruff check .`: passed
 - `uv run mypy app tests`: passed with no issues in 32 source files
@@ -719,7 +871,7 @@ Its approved deltas are synced into the long-lived specs under `openspec/specs/`
 | 5. API/smoke/evaluation | `uv run pytest tests/integration/test_policy_ingestion_api.py` and `uv run python -m app.policy_retrieval_smoke` |
 | 6. Documentation/final validation | Backend checks, long-lived spec validation, and archived task checklist |
 
-Latest validation snapshot:
+Historical validation snapshot:
 
 - `uv run ruff check .`: passed
 - `uv run mypy app tests`: passed with no issues in 35 source files
@@ -745,7 +897,7 @@ Its approved deltas are synced into the long-lived specs under `openspec/specs/`
 | 5. Workflow service/API | `uv run pytest tests/integration/test_workflow_api.py` and `uv run python -m app.workflow_smoke` |
 | 6. Boundaries/docs/final validation | Architecture-boundary tests, backend checks, OpenSpec archive, and long-lived spec validation |
 
-Latest validation snapshot:
+Historical validation snapshot:
 
 - `uv sync`: passed
 - `uv run ruff check .`: passed
@@ -772,16 +924,16 @@ npx.cmd -y @fission-ai/openspec@1.10.0 validate --specs --strict
 
 Expected result:
 
-- Phase 001, Phase 002, Phase 003, Phase 004, Phase 005, and Phase 006 are absent from the active-change list because they are archived.
+- Phase 001, Phase 002, Phase 003, Phase 004, Phase 005, Phase 006, and Phase 007 are absent from the active-change list because they are archived.
 - `normalize-rfc2119-requirements` is the only active change and its checklist is complete.
 - Strict long-lived-spec validation reports `18 passed, 0 failed`.
 
-`validate --all --strict` also validates every active change. In the latest Phase 006
+`validate --all --strict` also validates every active change. In the Phase 007 acceptance
 snapshot it reports `18 passed, 1 failed` because `normalize-rfc2119-requirements`
 is still an active stale normalization change after newer specs were synced.
-That active change currently fails independently of the archived Phase 006 work.
+That active change currently fails independently of the archived Phase 007 work.
 
-Inspect the archived artifacts and completed Phase 002/Phase 003/Phase 004/Phase 005/Phase 006 checklists with:
+Inspect the archived artifacts and completed Phase 002/Phase 003/Phase 004/Phase 005/Phase 006/Phase 007 checklists with:
 
 ```powershell
 Get-ChildItem openspec/changes/archive/2026-08-30-001-platform-foundation
@@ -790,6 +942,9 @@ Get-ChildItem openspec/changes/archive/2026-09-03-003-controlled-policy-ingestio
 Get-ChildItem openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval
 Get-ChildItem openspec/changes/archive/2026-09-05-005-langgraph-state-workflow
 Get-ChildItem openspec/changes/archive/2026-09-06-006-model-gateway-classification
+Get-ChildItem openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence
+Get-Content openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence/tasks.md
+Get-Content openspec/changes/archive/2026-09-10-007-deterministic-rules-confidence/validation.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-08-30-002-case-api-persistence/tasks.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-09-03-003-controlled-policy-ingestion/tasks.md
 rg -n "^- \[x\]" openspec/changes/archive/2026-09-04-004-hybrid-policy-retrieval/tasks.md

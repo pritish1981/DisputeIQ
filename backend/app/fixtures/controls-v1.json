@@ -1,0 +1,171 @@
+{
+  "profile_id": "duplicate-card-pilot",
+  "version": "controls-v1",
+  "environment": "local",
+  "synthetic": true,
+  "approval_ref": "user-approved-phase-007-synthetic-plan",
+  "effective_from": "2026-01-01T00:00:00Z",
+  "dispute_type": "duplicate_card_transaction",
+  "product": "card",
+  "channels": [
+    "web"
+  ],
+  "jurisdictions": [
+    "US"
+  ],
+  "evidence": {
+    "version": "duplicate-card-evidence-v1",
+    "requirements": [
+      {
+        "requirement_id": "customer_document",
+        "kinds": [
+          "receipt",
+          "customer_statement"
+        ]
+      },
+      {
+        "requirement_id": "disputed",
+        "kinds": [
+          "disputed"
+        ],
+        "maximum_age_seconds": 86400
+      },
+      {
+        "requirement_id": "candidate",
+        "kinds": [
+          "candidate"
+        ],
+        "maximum_age_seconds": 86400
+      },
+      {
+        "requirement_id": "disputed_settlement",
+        "kinds": [
+          "disputed_settlement"
+        ],
+        "maximum_age_seconds": 86400
+      },
+      {
+        "requirement_id": "candidate_settlement",
+        "kinds": [
+          "candidate_settlement"
+        ],
+        "maximum_age_seconds": 86400
+      },
+      {
+        "requirement_id": "disputed_refund",
+        "kinds": [
+          "disputed_refund"
+        ],
+        "maximum_age_seconds": 86400
+      },
+      {
+        "requirement_id": "candidate_refund",
+        "kinds": [
+          "candidate_refund"
+        ],
+        "maximum_age_seconds": 86400
+      }
+    ]
+  },
+  "eligibility": {
+    "version": "policy-eligibility-v1",
+    "family": "duplicate-card",
+    "mappings": [
+      {
+        "document_id": "POL-DUP-CARD-CONTROLS",
+        "version": "2026.09",
+        "family": "duplicate-card",
+        "dispute_type": "duplicate_card_transaction"
+      }
+    ]
+  },
+  "rules": {
+    "version": "duplicate-card-rules-v1",
+    "rules": [
+      {
+        "rule_id": "DUP-1",
+        "version": "1",
+        "handler": "eligibility",
+        "order": 0,
+        "effective_from": "2026-01-01T00:00:00Z",
+        "parameters": {},
+        "policy_refs": [
+          "POL-DUP-CARD-CONTROLS:2026.09"
+        ]
+      },
+      {
+        "rule_id": "DUP-2",
+        "version": "1",
+        "handler": "timeline",
+        "order": 1,
+        "effective_from": "2026-01-01T00:00:00Z",
+        "parameters": {
+          "filing_days": "120"
+        },
+        "policy_refs": [
+          "POL-DUP-CARD-CONTROLS:2026.09"
+        ]
+      },
+      {
+        "rule_id": "DUP-3",
+        "version": "1",
+        "handler": "evidence",
+        "order": 2,
+        "effective_from": "2026-01-01T00:00:00Z",
+        "parameters": {},
+        "policy_refs": [
+          "POL-DUP-CARD-CONTROLS:2026.09"
+        ]
+      },
+      {
+        "rule_id": "DUP-4",
+        "version": "1",
+        "handler": "policy",
+        "order": 3,
+        "effective_from": "2026-01-01T00:00:00Z",
+        "parameters": {},
+        "policy_refs": [
+          "POL-DUP-CARD-CONTROLS:2026.09"
+        ]
+      },
+      {
+        "rule_id": "DUP-5",
+        "version": "1",
+        "handler": "duplicate",
+        "order": 4,
+        "effective_from": "2026-01-01T00:00:00Z",
+        "parameters": {
+          "window_seconds": "300"
+        },
+        "policy_refs": [
+          "POL-DUP-CARD-CONTROLS:2026.09"
+        ]
+      },
+      {
+        "rule_id": "DUP-6",
+        "version": "1",
+        "handler": "remediation",
+        "order": 5,
+        "effective_from": "2026-01-01T00:00:00Z",
+        "parameters": {},
+        "policy_refs": [
+          "POL-DUP-CARD-CONTROLS:2026.09"
+        ]
+      }
+    ]
+  },
+  "confidence": {
+    "version": "case-confidence-v1",
+    "weights": {
+      "classification": "0.15",
+      "evidence": "0.30",
+      "policy": "0.25",
+      "rules": "0.30"
+    },
+    "penalties": {
+      "conflicts": "0.20",
+      "tools": "0.20"
+    },
+    "threshold": "0.70"
+  }
+}

@@ -21,6 +21,7 @@ WorkflowNodeName = Literal[
 
 
 class WorkflowState(TypedDict, total=False):
+    control_evaluation_id: str
     schema_version: str
     case_id: str
     workflow_id: str
@@ -39,6 +40,8 @@ class WorkflowState(TypedDict, total=False):
 
 
 ALLOWED_NODE_OPERATIONS: dict[str, frozenset[str]] = {
+    "rules": frozenset({"rules.evaluate"}),
+    "confidence": frozenset({"confidence.evaluate"}),
     "intake": frozenset({"case.read"}),
     "classification": frozenset({"classification.model_gateway"}),
     "authoritative_context": frozenset({"provider_context.reference"}),
@@ -97,6 +100,7 @@ def build_workflow_graph(
     *,
     classify_dispute: Callable[[WorkflowState], ClassificationDecision],
     retrieve_policy: Callable[[WorkflowState], PolicyRetrievalResponse],
+    control_nodes: dict[str, Callable[[WorkflowState], WorkflowState]] | None = None,
 ) -> Any:
     graph = StateGraph(WorkflowState)
 
@@ -120,6 +124,19 @@ def build_workflow_graph(
             f"classification:{state['case_id']}:classification-output-v1:classification-router-v1"
         )
         if expected_key in _side_effects(state) and "classification" in _stage_summaries(state):
+            cached = _stage_summaries(state)["classification"]
+            if (
+                control_nodes
+                and isinstance(cached, dict)
+                and cached.get("category") != ("duplicate_card_transaction")
+            ):
+                state["status"] = "CONTROLLED_STOP"
+                state["interrupt"] = {
+                    "required": True,
+                    "reason": "category_downstream_out_of_scope",
+                    "message": "Deterministic controls are enabled only for duplicate-card cases.",
+                    "resume_requirements": ["future_phase_category_workflow"],
+                }
             _record_node(state, node_name="classification", started=started)
             return state
         decision = classify_dispute(state)
@@ -183,6 +200,10 @@ def build_workflow_graph(
     def authoritative_context(state: WorkflowState) -> WorkflowState:
         started = perf_counter()
         authorize_node_operation("authoritative_context", "provider_context.reference")
+        if control_nodes:
+            state = control_nodes["authoritative_context"](state)
+            _record_node(state, node_name="authoritative_context", started=started)
+            return state
         case = cast(dict[str, Any], state["case"])
         provider_context = cast(list[dict[str, object]], case.get("provider_context", []))
         refs = [
@@ -208,6 +229,10 @@ def build_workflow_graph(
     def evidence_gate(state: WorkflowState) -> WorkflowState:
         started = perf_counter()
         authorize_node_operation("evidence_gate", "evidence.evaluate")
+        if control_nodes:
+            state = control_nodes["evidence_gate"](state)
+            _record_node(state, node_name="evidence_gate", started=started)
+            return state
         case = cast(dict[str, Any], state["case"])
         evidence_items = cast(list[dict[str, object]], case.get("evidence_metadata", []))
         if not evidence_items:
@@ -231,6 +256,10 @@ def build_workflow_graph(
     def policy_context(state: WorkflowState) -> WorkflowState:
         started = perf_counter()
         authorize_node_operation("policy_context", "policy.retrieve")
+        if control_nodes:
+            state = control_nodes["policy_context"](state)
+            _record_node(state, node_name="policy_context", started=started)
+            return state
         response = retrieve_policy(state)
         _stage_summaries(state)["policy_context"] = {
             "status": response.status,
@@ -261,6 +290,10 @@ def build_workflow_graph(
     def controlled_stop(state: WorkflowState) -> WorkflowState:
         started = perf_counter()
         authorize_node_operation("controlled_stop", "workflow.stop")
+        if control_nodes:
+            state = control_nodes["controlled_stop"](state)
+            _record_node(state, node_name="controlled_stop", status="paused", started=started)
+            return state
         state["status"] = "CONTROLLED_STOP"
         state["interrupt"] = {
             "required": True,
@@ -285,10 +318,30 @@ def build_workflow_graph(
         return "authoritative_context"
 
     def after_evidence(state: WorkflowState) -> str:
+        if control_nodes:
+            return END if str(state.get("status", "")).startswith("WAITING_") else "policy_context"
         return END if state.get("status") == "WAITING_EVIDENCE" else "policy_context"
 
     def after_policy(state: WorkflowState) -> str:
+        if control_nodes:
+            return END if str(state.get("status", "")).startswith("WAITING_") else "rules"
         return END if state.get("status") == "WAITING_POLICY_REVIEW" else "controlled_stop"
+
+    def rules(state: WorkflowState) -> WorkflowState:
+        started = perf_counter()
+        authorize_node_operation("rules", "rules.evaluate")
+        assert control_nodes is not None
+        state = control_nodes["rules"](state)
+        _record_node(state, node_name="rules", started=started)
+        return state
+
+    def confidence(state: WorkflowState) -> WorkflowState:
+        started = perf_counter()
+        authorize_node_operation("confidence", "confidence.evaluate")
+        assert control_nodes is not None
+        state = control_nodes["confidence"](state)
+        _record_node(state, node_name="confidence", started=started)
+        return state
 
     graph.add_node("intake", intake)
     graph.add_node("classification", classification)
@@ -299,7 +352,29 @@ def build_workflow_graph(
     graph.set_entry_point("intake")
     graph.add_edge("intake", "classification")
     graph.add_conditional_edges("classification", after_classification)
-    graph.add_edge("authoritative_context", "evidence_gate")
+    if control_nodes:
+        graph.add_conditional_edges(
+            "authoritative_context",
+            lambda state: (
+                END if str(state.get("status", "")).startswith("WAITING_") else "evidence_gate"
+            ),
+        )
+        graph.add_node("rules", rules)
+        graph.add_node("confidence", confidence)
+        graph.add_conditional_edges(
+            "rules",
+            lambda state: (
+                END if str(state.get("status", "")).startswith("WAITING_") else "confidence"
+            ),
+        )
+        graph.add_conditional_edges(
+            "confidence",
+            lambda state: (
+                END if str(state.get("status", "")).startswith("WAITING_") else "controlled_stop"
+            ),
+        )
+    else:
+        graph.add_edge("authoritative_context", "evidence_gate")
     graph.add_conditional_edges("evidence_gate", after_evidence)
     graph.add_conditional_edges("policy_context", after_policy)
     graph.add_edge("controlled_stop", END)

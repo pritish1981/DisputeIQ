@@ -2,12 +2,152 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class ControlConfigModel(Base):
+    __tablename__ = "control_config_versions"
+    __table_args__ = (Index("uq_control_profile_version", "profile_id", "version", unique=True),)
+
+    config_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(String(100))
+    version: Mapped[str] = mapped_column(String(80))
+    environment: Mapped[str] = mapped_column(String(40))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, object]] = mapped_column(JSON)
+    regression: Mapped[dict[str, object]] = mapped_column(JSON)
+    actor_ref: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ControlEvaluationModel(Base):
+    __tablename__ = "control_evaluations"
+    __table_args__ = (
+        Index("uq_control_workflow_state", "workflow_id", "state_version", unique=True),
+        UniqueConstraint("evaluation_id", "workflow_id", name="uq_control_evaluation_scope"),
+        ForeignKeyConstraint(
+            ["workflow_id", "case_id"],
+            ["workflow_runs.workflow_id", "workflow_runs.case_id"],
+            name="fk_control_workflow_case",
+        ),
+        ForeignKeyConstraint(
+            ["prior_evaluation_id", "workflow_id"],
+            ["control_evaluations.evaluation_id", "control_evaluations.workflow_id"],
+            name="fk_control_prior_scope",
+        ),
+    )
+
+    evaluation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflow_runs.workflow_id"))
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.case_id"))
+    state_version: Mapped[int] = mapped_column(Integer)
+    config_id: Mapped[str | None] = mapped_column(ForeignKey("control_config_versions.config_id"))
+    prior_evaluation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("control_evaluations.evaluation_id"), nullable=True
+    )
+    bundle: Mapped[dict[str, object]] = mapped_column(JSON)
+    inputs: Mapped[dict[str, object]] = mapped_column(JSON)
+    bundle_hash: Mapped[str] = mapped_column(String(64))
+    correlation_id: Mapped[str] = mapped_column(String(100))
+    actor_ref: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ControlStageColumns:
+    result_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("control_evaluations.evaluation_id"), unique=True
+    )
+    result: Mapped[dict[str, object]] = mapped_column(JSON)
+    result_hash: Mapped[str] = mapped_column(String(64))
+    correlation_id: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EvidenceAssessmentModel(ControlStageColumns, Base):
+    __tablename__ = "evidence_assessments"
+
+
+class PolicyEligibilityModel(ControlStageColumns, Base):
+    __tablename__ = "policy_eligibility_evaluations"
+
+
+class RuleExecutionModel(ControlStageColumns, Base):
+    __tablename__ = "rule_executions"
+
+
+class ConfidenceEvaluationModel(ControlStageColumns, Base):
+    __tablename__ = "case_confidence_evaluations"
+
+
+class ControlReviewRequestModel(Base):
+    __tablename__ = "control_review_requests"
+    __table_args__ = (Index("uq_control_review_type", "evaluation_id", "kind", unique=True),)
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    evaluation_id: Mapped[str] = mapped_column(ForeignKey("control_evaluations.evaluation_id"))
+    kind: Mapped[str] = mapped_column(String(60))
+    required_role: Mapped[str] = mapped_column(String(80))
+    reasons: Mapped[list[str]] = mapped_column(JSON)
+    required_items: Mapped[list[str]] = mapped_column(JSON)
+    correlation_id: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ControlRequestFulfillmentModel(Base):
+    __tablename__ = "control_request_fulfillments"
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("control_review_requests.request_id"), primary_key=True
+    )
+    evaluation_id: Mapped[str] = mapped_column(ForeignKey("control_evaluations.evaluation_id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EvidenceValidationModel(Base):
+    __tablename__ = "evidence_validations"
+    evidence_id: Mapped[str] = mapped_column(
+        ForeignKey("evidence_metadata.evidence_id"), primary_key=True
+    )
+    checksum: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(40))
+    provenance: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+def _immutable_control(*args: object) -> None:
+    raise ValueError("Control records are append-only; create a new version/evaluation")
+
+
+for _control_model in (
+    ControlConfigModel,
+    ControlEvaluationModel,
+    EvidenceAssessmentModel,
+    PolicyEligibilityModel,
+    RuleExecutionModel,
+    ConfidenceEvaluationModel,
+    ControlReviewRequestModel,
+    ControlRequestFulfillmentModel,
+    EvidenceValidationModel,
+):
+    event.listen(_control_model, "before_update", _immutable_control)
+    event.listen(_control_model, "before_delete", _immutable_control)
 
 
 class CaseModel(Base):
@@ -153,6 +293,7 @@ class WorkflowRunModel(Base):
     __table_args__ = (
         Index("ix_workflow_runs_case_status", "case_id", "status"),
         Index("ix_workflow_runs_correlation", "correlation_id"),
+        UniqueConstraint("workflow_id", "case_id", name="uq_workflow_case_scope"),
     )
 
     workflow_id: Mapped[str] = mapped_column(String(36), primary_key=True)

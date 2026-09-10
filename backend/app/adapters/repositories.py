@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Select, select, text, update
+from sqlalchemy import Select, String, bindparam, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.adapters.models import (
@@ -412,6 +412,8 @@ class WorkflowRepository:
             "RUNNING",
             "WAITING_EVIDENCE",
             "WAITING_POLICY_REVIEW",
+            "WAITING_RULE_REVIEW",
+            "WAITING_SUPERVISOR_REVIEW",
             "WAITING_MANUAL_CLASSIFICATION",
             "MANUAL_PROCESSING",
             "CONTROLLED_STOP",
@@ -494,6 +496,10 @@ class WorkflowRepository:
         correlation_id: str,
         now: datetime,
     ) -> WorkflowCheckpointModel:
+        if run.graph_version == "duplicate-card-controls-v1":
+            state = {
+                key: value for key, value in state.items() if key not in {"case", "resume_payload"}
+            }
         next_seq = run.checkpoint_seq + 1
         next_version = run.state_version + 1
         telemetry = {
@@ -532,7 +538,12 @@ class WorkflowRepository:
         return checkpoint
 
     def compare_state_version(self, workflow_id: str, expected_version: int) -> WorkflowRunModel:
-        run = self.get(workflow_id)
+        run = self.db.scalar(
+            select(WorkflowRunModel)
+            .where(WorkflowRunModel.workflow_id == workflow_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if run is None:
             raise WorkflowRunNotFoundError(workflow_id)
         if run.state_version != expected_version:
@@ -865,6 +876,7 @@ class PolicyRepository:
         channel: str,
         jurisdiction: str,
         limit: int,
+        eligible_chunk_ids: list[str] | None = None,
     ) -> list[PolicyRetrievalRow]:
         if self.db.bind is not None and self.db.bind.dialect.name == "postgresql":
             return self._postgres_hybrid_retrieve(
@@ -876,6 +888,7 @@ class PolicyRepository:
                 channel=channel,
                 jurisdiction=jurisdiction,
                 limit=limit,
+                eligible_chunk_ids=eligible_chunk_ids,
             )
         return self._sqlite_hybrid_retrieve(
             corpus=corpus,
@@ -886,6 +899,7 @@ class PolicyRepository:
             channel=channel,
             jurisdiction=jurisdiction,
             limit=limit,
+            eligible_chunk_ids=eligible_chunk_ids,
         )
 
     def _postgres_hybrid_retrieve(
@@ -899,6 +913,7 @@ class PolicyRepository:
         channel: str,
         jurisdiction: str,
         limit: int,
+        eligible_chunk_ids: list[str] | None = None,
     ) -> list[PolicyRetrievalRow]:
         stmt = text(
             """
@@ -925,10 +940,23 @@ class PolicyRepository:
               AND c.product = :product
               AND c.channel = :channel
               AND c.jurisdiction = :jurisdiction
+              AND c.chunk_id IN :eligible_chunk_ids
             ORDER BY lexical_score DESC, vector_score DESC, c.document_id, c.version, c.section
             LIMIT :limit
             """
         )
+        stmt = stmt.bindparams(bindparam("eligible_chunk_ids", expanding=True, type_=String))
+        if eligible_chunk_ids is None:
+            eligible_chunk_ids = [
+                c.chunk_id
+                for c in self.eligible_chunks(
+                    corpus=corpus,
+                    effective_date=effective_date,
+                    product=product,
+                    channel=channel,
+                    jurisdiction=jurisdiction,
+                )
+            ]
         rows = self.db.execute(
             stmt,
             {
@@ -940,6 +968,7 @@ class PolicyRepository:
                 "channel": channel,
                 "jurisdiction": jurisdiction,
                 "limit": limit,
+                "eligible_chunk_ids": eligible_chunk_ids,
             },
         ).mappings()
         results: list[PolicyRetrievalRow] = []
@@ -969,6 +998,7 @@ class PolicyRepository:
         channel: str,
         jurisdiction: str,
         limit: int,
+        eligible_chunk_ids: list[str] | None = None,
     ) -> list[PolicyRetrievalRow]:
         query_terms = _terms(query)
         query_vector = _parse_vector(query_embedding)
@@ -980,6 +1010,8 @@ class PolicyRepository:
             channel=channel,
             jurisdiction=jurisdiction,
         ):
+            if eligible_chunk_ids is not None and chunk.chunk_id not in eligible_chunk_ids:
+                continue
             chunk_terms = _terms(chunk.content)
             lexical_score = (
                 len(query_terms & chunk_terms) / len(query_terms) if query_terms else 0.0

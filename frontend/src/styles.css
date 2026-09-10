@@ -92,3 +92,10 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+.controls { grid-column: 1 / -1; min-width: 0; }
+.controls table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+.controls th, .controls td { padding: .6rem; text-align: left; border-bottom: 1px solid #dce3ed; }
+.controls p, .controls li, .controls dd { overflow-wrap: anywhere; }
+.controls h3 { overflow-wrap: anywhere; }
+.control-table { overflow-x: auto; }
+.control-table table { min-width: 560px; }
